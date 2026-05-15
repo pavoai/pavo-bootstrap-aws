@@ -1,0 +1,268 @@
+[
+  {
+    "sid": "RDS",
+    "effect": "Allow",
+    "actions": ["rds:*"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "ElastiCache",
+    "effect": "Allow",
+    "actions": ["elasticache:*"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "S3",
+    "effect": "Allow",
+    "actions": ["s3:*"],
+    "resources": [
+      "arn:aws:s3:::pavo-*",
+      "arn:aws:s3:::pavo-*/*"
+    ]
+  },
+  {
+    "sid": "SNS",
+    "effect": "Allow",
+    "actions": ["sns:*"],
+    "resources": ["arn:aws:sns:*:*:pavo-*"]
+  },
+  {
+    "sid": "SQS",
+    "effect": "Allow",
+    "actions": ["sqs:*"],
+    "resources": ["arn:aws:sqs:*:*:pavo-*"]
+  },
+  {
+    "sid": "EFS",
+    "effect": "Allow",
+    "actions": ["elasticfilesystem:*"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "EKSAccessAndDescribe",
+    "effect": "Allow",
+    "actions": [
+      "eks:DescribeCluster",
+      "eks:ListClusters",
+      "eks:CreateAccessEntry",
+      "eks:DescribeAccessEntry",
+      "eks:ListAccessEntries",
+      "eks:AssociateAccessPolicy",
+      "eks:DisassociateAccessPolicy",
+      "eks:ListAssociatedAccessPolicies",
+      "eks:AccessKubernetesApi"
+    ],
+    "resources": ["*"]
+  },
+  {
+    "sid": "Bedrock",
+    "effect": "Allow",
+    "actions": [
+      "bedrock:CreateFoundationModelAgreement",
+      "bedrock:GetFoundationModelAgreement",
+      "bedrock:ListFoundationModelAgreementOffers",
+      "bedrock:GetUseCaseForModelAccess",
+      "bedrock:PutUseCaseForModelAccess",
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream"
+    ],
+    "resources": ["*"]
+  },
+  {
+    "sid": "IAMScopedToPavoNames",
+    "effect": "Allow",
+    "actions": [
+      "iam:DeleteRole",
+      "iam:GetRole",
+      "iam:ListRoles",
+      "iam:PassRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole"
+    ],
+    "resources": ["arn:aws:iam::*:role/pavo-*"]
+  },
+  {
+    "sid": "IAMCreateRolesOnlyWithBoundary",
+    "effect": "Allow",
+    "actions": [
+      "iam:CreateRole",
+      "iam:PutRolePermissionsBoundary"
+    ],
+    "resources": ["arn:aws:iam::*:role/pavo-*"],
+    "conditions": {
+      "ArnLike": {
+        "iam:PermissionsBoundary": "arn:aws:iam::*:policy/pavo-permission-boundary-*"
+      }
+    }
+  },
+  {
+    "sid": "DenyCreateRoleWithoutBoundary",
+    "effect": "Deny",
+    "actions": ["iam:CreateRole"],
+    "resources": ["arn:aws:iam::*:role/pavo-*"],
+    "conditions": {
+      "Null": {
+        "iam:PermissionsBoundary": "true"
+      }
+    }
+  },
+  {
+    "sid": "DenyDeleteRolePermissionsBoundary",
+    "effect": "Deny",
+    "actions": ["iam:DeleteRolePermissionsBoundary"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "ServiceLinkedRoleCreate",
+    "effect": "Allow",
+    "actions": ["iam:CreateServiceLinkedRole"],
+    "resources": [
+      "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
+      "arn:aws:iam::*:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache*",
+      "arn:aws:iam::*:role/aws-service-role/elasticfilesystem.amazonaws.com/*"
+    ],
+    "conditions": {
+      "StringLike": {
+        "iam:AWSServiceName": [
+          "rds.amazonaws.com",
+          "elasticache.amazonaws.com",
+          "elasticfilesystem.amazonaws.com"
+        ]
+      }
+    }
+  },
+  {
+    "sid": "ServiceLinkedRolePolicyAttach",
+    "effect": "Allow",
+    "actions": [
+      "iam:AttachRolePolicy",
+      "iam:PutRolePolicy"
+    ],
+    "resources": [
+      "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
+      "arn:aws:iam::*:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache*",
+      "arn:aws:iam::*:role/aws-service-role/elasticfilesystem.amazonaws.com/*"
+    ]
+  },
+  {
+    "sid": "SSMRead",
+    "effect": "Allow",
+    "actions": [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath"
+    ],
+    "resources": ["arn:aws:ssm:*:*:parameter/pavo/*"]
+  },
+  {
+    "sid": "SecretsManagerCreateRDSSecret",
+    "effect": "Allow",
+    "actions": ["secretsmanager:CreateSecret"],
+    "resources": ["*"],
+    "conditions": {
+      "StringLike": {
+        "secretsmanager:Name": "rds!*"
+      }
+    }
+  },
+  {
+    "sid": "SecretsManagerTagRDSSecret",
+    "effect": "Allow",
+    "actions": [
+      "secretsmanager:TagResource",
+      "secretsmanager:UntagResource"
+    ],
+    "resources": ["arn:aws:secretsmanager:*:*:secret:rds!*"]
+  },
+  {
+    "sid": "SecretsManagerScopedRead",
+    "effect": "Allow",
+    "actions": [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret"
+    ],
+    "resources": ["arn:aws:secretsmanager:*:*:secret:rds!*"]
+  },
+  {
+    "sid": "SecretsManagerListSecrets",
+    "effect": "Allow",
+    "actions": ["secretsmanager:ListSecrets"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "EC2ReadAndSGCRUD",
+    "effect": "Allow",
+    "actions": [
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeAvailabilityZones",
+      "ec2:CreateSecurityGroup",
+      "ec2:DeleteSecurityGroup",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupEgress"
+    ],
+    "resources": ["*"]
+  },
+  {
+    "sid": "EC2TagWritesOnSecurityGroupsOnly",
+    "effect": "Allow",
+    "actions": [
+      "ec2:CreateTags",
+      "ec2:DeleteTags"
+    ],
+    "resources": [
+      "arn:aws:ec2:*:*:security-group/*",
+      "arn:aws:ec2:*:*:security-group-rule/*"
+    ]
+  },
+  {
+    "sid": "KMSUseOnCustomerKey",
+    "effect": "Allow",
+    "actions": [
+      "kms:DescribeKey",
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext"
+    ],
+    "resources": ["*"],
+    "conditions": {
+      "StringLike": {
+        "kms:ViaService": [
+          "rds.*.amazonaws.com",
+          "secretsmanager.*.amazonaws.com",
+          "elasticache.*.amazonaws.com",
+          "elasticfilesystem.*.amazonaws.com",
+          "s3.*.amazonaws.com"
+        ]
+      }
+    }
+  },
+  {
+    "sid": "KMSGrantsForAWSResources",
+    "effect": "Allow",
+    "actions": [
+      "kms:CreateGrant",
+      "kms:ListGrants",
+      "kms:RevokeGrant"
+    ],
+    "resources": ["*"],
+    "conditions": {
+      "Bool": {
+        "kms:GrantIsForAWSResource": "true"
+      }
+    }
+  }
+]
