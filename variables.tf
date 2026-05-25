@@ -30,3 +30,21 @@ variable "eks_oidc_provider" {
     error_message = "eks_oidc_provider must be the issuer host/path without the https:// or http:// prefix."
   }
 }
+
+variable "runner_role_arn" {
+  description = "IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the underlying role ARN (arn:aws:iam::<acct>:role/<RoleName>), NOT an assumed-role session ARN. See README → 'Onboarding a new AWS BYOC cell' for how to obtain it."
+  type        = string
+
+  validation {
+    # Reject assumed-role session ARNs — they look like
+    #   arn:aws:sts::<acct>:assumed-role/<RoleName>/<session>
+    # and they're a common mistake when copying from `aws sts get-caller-identity`.
+    # AWS access entries need the underlying role ARN, not the assumed session.
+    condition = (
+      length(var.runner_role_arn) > 0 &&
+      startswith(var.runner_role_arn, "arn:aws:iam::") &&
+      length(regexall("[:/]assumed-role/", var.runner_role_arn)) == 0
+    )
+    error_message = "runner_role_arn must be an IAM role ARN (arn:aws:iam::<acct>:role/<RoleName>), not an assumed-role session ARN. Use `aws iam list-roles` to find the role, or strip the trailing `/<session>` and replace `:sts::<acct>:assumed-role/` with `:iam::<acct>:role/`."
+  }
+}
