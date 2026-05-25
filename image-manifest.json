@@ -1,0 +1,52 @@
+{
+  "services": {
+    "api-gateway": {
+      "images": [
+        { "yq_path": ".image.tag", "ghcr_name": "api-gateway" }
+      ]
+    },
+    "intern": {
+      "images": [
+        { "yq_path": ".image.tag", "ghcr_name": "intern" },
+        { "yq_path": ".temporalWorkers.image.tag", "ghcr_name": "intern-temporal-worker" }
+      ]
+    },
+    "frontend": {
+      "images": [
+        { "yq_path": ".image.tag", "ghcr_name": "frontend" }
+      ]
+    },
+    "onboarding": {
+      "images": [
+        { "yq_path": ".applications.orchestrator-api.image.tag", "ghcr_name": "onboarding-orchestrator-api" },
+        { "yq_path": ".applications.orchestrator-v2.image.tag", "ghcr_name": "onboarding-orchestrator-v2" },
+        { "yq_path": ".applications.connector-service.image.tag", "ghcr_name": "onboarding-connector-service" },
+        { "yq_path": ".applications.nugget-worker.image.tag", "ghcr_name": "onboarding-nugget-worker" },
+        { "yq_path": ".applications.rag-worker.image.tag", "ghcr_name": "onboarding-rag-worker" },
+        { "yq_path": ".applications.rag-service.image.tag", "ghcr_name": "onboarding-rag-service" }
+      ]
+    },
+    "capability-proxy": {
+      "images": [
+        { "yq_path": ".image.tag", "ghcr_name": "capability-proxy" },
+        { "yq_path": ".squid.image.tag", "ghcr_name": "capability-proxy-squid" }
+      ]
+    },
+    "exec-runner": {
+      "images": [
+        { "yq_path": ".image.tag", "ghcr_name": "exec-runner" },
+        { "yq_path": ".workerPool.image.tag", "ghcr_name": "sandbox-worker" }
+      ]
+    },
+    "tribal-knowledge": {
+      "images": [
+        { "yq_path": ".applications.query-service.image.tag", "ghcr_name": "query-service" },
+        { "yq_path": ".applications.entity-tribal.image.tag", "ghcr_name": "entity-tribal" },
+        { "yq_path": ".applications.tribal-generator.image.tag", "ghcr_name": "tribal-generator" },
+        { "yq_path": ".applications.data-task-generator.image.tag", "ghcr_name": "data-task-generator" },
+        { "yq_path": ".applications.pre-aggregate-generator.image.tag", "ghcr_name": "pre-aggregate-generator" },
+        { "yq_path": ".applications.gcc-generator.image.tag", "ghcr_name": "gcc-generator" }
+      ]
+    }
+  }
+}

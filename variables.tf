@@ -48,3 +48,54 @@ variable "runner_role_arn" {
     error_message = "runner_role_arn must be an IAM role ARN (arn:aws:iam::<acct>:role/<RoleName>), not an assumed-role session ARN. Use `aws iam list-roles` to find the role, or strip the trailing `/<session>` and replace `:sts::<acct>:assumed-role/` with `:iam::<acct>:role/`."
   }
 }
+
+# -----------------------------------------------------------------------------
+# Sigstore Policy Controller (cell-scoped, single owner per EKS cluster)
+# -----------------------------------------------------------------------------
+# The policy controller chart, its CRDs (ClusterImagePolicy), and the per-service
+# ClusterImagePolicy objects are cluster-scoped — they belong in cell bootstrap,
+# NOT per-instance pavoInfra. See README → "Sigstore policy controller" for the
+# ownership model and the image-manifest.json that drives the per-service CIPs.
+
+variable "image_policy_mode" {
+  description = <<-EOT
+    Sigstore ClusterImagePolicy enforcement mode for ghcr.io/pavoai/** images.
+    - "warn":    admit images that fail verification, emit Warning to admission caller
+                 (and controller log entry). Use during Phase A signing bake-in.
+    - "enforce": reject admission of images that fail verification. Use once Phase A
+                 has signed + attested every live Pavo image in the cell.
+    The policy verifies: cosign signature + CycloneDX SBOM attestation presence +
+    cosign-vuln attestation presence. Attestation CONTENT is not inspected — CVE
+    gating happens in central-ci's signing pipeline.
+  EOT
+  type        = string
+  default     = "warn"
+  validation {
+    condition     = contains(["warn", "enforce"], var.image_policy_mode)
+    error_message = "image_policy_mode must be \"warn\" or \"enforce\"."
+  }
+}
+
+variable "policy_controller_chart_version" {
+  description = <<-EOT
+    Helm chart version for sigstore/policy-controller. Bump deliberately and
+    test in DEV warn mode first — chart upgrades can change webhook config
+    paths or CRD API versions.
+  EOT
+  type        = string
+  default     = "0.10.6"
+}
+
+variable "central_ci_project_id" {
+  description = <<-EOT
+    GCP project that hosts Pavo's central Cloud Build (the one that builds
+    and signs all ghcr.io/pavoai/* images). The per-service signing SAs live
+    here: cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com.
+    Provisioned by central-ci/ in this repo. Default matches today's
+    onboarding-455713 project. Pavo images are built in GCP regardless of
+    which cloud the customer deploys to, so this is still a GCP project ID
+    even in the AWS BYOC cell-bootstrap module.
+  EOT
+  type        = string
+  default     = "onboarding-455713"
+}
