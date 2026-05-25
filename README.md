@@ -2,29 +2,49 @@
 
 Customer-applied Terraform module that provisions the **bootstrap-tier** IAM
 resources Pavo's workload module needs in your AWS account. This module is
-applied **once per Pavo instance** by you (the customer), before Pavo's
-workload Terraform runs.
+applied **once per deployment cell** (one EKS cluster) by you (the customer),
+before Pavo's workload Terraform runs. It does not depend on a Pavo instance
+ID, so it can run as soon as the deployment cell exists.
+
+## Resource scopes
+
+The resources this module creates fall into two scopes:
+
+- **Account-scoped** — the two IAM permission boundaries. They reference no
+  cell/instance resources, so they are shared across the whole AWS account.
+- **Cell-scoped** — the ESO IRSA role (its trust policy is bound to one
+  cluster's OIDC provider) and the cell's network metadata.
+
+**Short-term design:** a single bootstrap module, run **once per cell**. It
+creates the account-shared permission boundaries (stable `-shared` names) and
+the cell-scoped ESO role (keyed on the cluster name) together in one apply.
+**This assumes one deployment cell per AWS account.** A second cell in the same
+account would collide on the shared permission-boundary IAM names — see
+*Scoping notes* below for the limitation and the planned module split.
 
 ## What it creates
 
-- **1 IAM role**: `pavo-eso-${instance_id}` — IRSA role assumed by the
+- **1 IAM role**: `pavo-eso-${eks_cluster_name}` — IRSA role assumed by the
   External Secrets Operator running in your EKS cluster, used to read the
   RDS-managed master password secret from your AWS Secrets Manager and decrypt
   it via your CMK.
-- **1 inline role policy**: `pavo-eso-policy-${instance_id}` — grants the ESO
-  role `secretsmanager:GetSecretValue` / `DescribeSecret` on `rds!*` and
+- **1 inline role policy**: `pavo-eso-policy-${eks_cluster_name}` — grants the
+  ESO role `secretsmanager:GetSecretValue` / `DescribeSecret` on `rds!*` and
   `pavo-*` secrets, plus `kms:Decrypt` / `DescribeKey` scoped via
   `kms:ViaService = secretsmanager.<region>.amazonaws.com`.
 - **2 IAM policies (permission boundaries)**:
-  - `pavo-permission-boundary-${instance_id}` — workload boundary attached to
+  - `pavo-permission-boundary-shared` — workload boundary attached to
     Pavo's app IAM role (`pavo-role-*`). Source of truth:
     `policy-statements.json`.
-  - `pavo-permission-boundary-ebs-csi-${instance_id}` — separate boundary for
+  - `pavo-permission-boundary-ebs-csi-shared` — separate boundary for
     the EBS CSI driver IRSA role. Mirrors `AmazonEBSCSIDriverPolicy`. Source:
     `ebs-csi-policy-statements.json`.
-- **7 SSM parameters** under `/pavo/${instance_id}/`: `vpc_id`,
-  `private_subnet_ids`, `eks_cluster_name`, `eks_oidc_provider`,
-  `eso_role_arn`, `permission_boundary_arn`, `ebs_csi_permission_boundary_arn`.
+- **7 SSM parameters**:
+  - **5 cell-scoped** under `/pavo/cells/${eks_cluster_name}/`: `vpc_id`,
+    `private_subnet_ids`, `eks_cluster_name`, `eks_oidc_provider`,
+    `eso_role_arn`.
+  - **2 account-scoped** under `/pavo/shared/`: `permission_boundary_arn`,
+    `ebs_csi_permission_boundary_arn`.
 
 ## Configuring Terraform state (REQUIRED)
 
@@ -43,7 +63,7 @@ terraform {
 ```bash
 terraform init \
   -backend-config="bucket=my-tf-state" \
-  -backend-config="key=pavo-bootstrap-aws/${INSTANCE_ID}/terraform.tfstate" \
+  -backend-config="key=pavo-bootstrap-aws/${EKS_CLUSTER_NAME}/terraform.tfstate" \
   -backend-config="region=us-east-1" \
   -backend-config="dynamodb_table=my-tf-state-locks" \
   -backend-config="encrypt=true"
@@ -56,7 +76,7 @@ terraform init \
 terraform {
   backend "s3" {
     bucket         = "my-tf-state"
-    key            = "pavo-bootstrap-aws/<instance-id>/terraform.tfstate"
+    key            = "pavo-bootstrap-aws/<eks-cluster-name>/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "my-tf-state-locks"
     encrypt        = true
@@ -87,7 +107,6 @@ For Terraform Cloud / HCP Terraform / other backends, see
 | Variable | Description |
 |---|---|
 | `aws_region` | AWS region where the Pavo deployment lives. |
-| `instance_id` | Pavo deployment instance ID (matches Omnistrate's `$sys.id`). 1-40 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphen. |
 | `vpc_id` | VPC ID provisioned by Omnistrate's CFN. |
 | `private_subnet_ids` | Private subnet IDs (Omnistrate-tagged `kubernetes.io/role/internal-elb=1`). |
 | `eks_cluster_name` | EKS cluster name (Omnistrate-provisioned). |
@@ -218,9 +237,24 @@ rotate:
 
 This is a multi-step manual procedure; coordinate with Pavo support.
 
-## Cluster-sharing assumption
+## Scoping notes
 
-This module assumes **one Pavo instance per EKS cluster**. ESO + IRSA are
-designed for single-instance per cluster. If shared clusters become a
-requirement, ESO moves to a cluster-level deployment-cell amenity (tracked
-as a follow-up).
+This module's resources are **account-scoped** (the permission boundaries) and
+**cell-scoped** (the ESO role + network metadata) — see *Resource scopes*
+above. There is exactly one ESO IRSA role per cell: the External Secrets
+Operator is installed once per cluster (one `external-secrets` ServiceAccount),
+so the role is shared by every Pavo instance on that cell.
+
+**Limitation — one deployment cell per account.** This is a single module run
+once per cell that creates account-scoped *and* cell-scoped resources together.
+Running it for a **second cell in the same account** re-creates the
+account-scoped `-shared` permission boundaries from fresh state and collides
+(`EntityAlreadyExists`) — the boundary names are account-global, so the second
+run cannot succeed.
+
+**Planned follow-up — split the module** so multi-cell accounts are supported:
+
+1. *account bootstrap* — the two shared permission boundaries + `/pavo/shared/*`
+   SSM parameters; applied **once per AWS account**.
+2. *cell bootstrap* — the ESO IRSA role + `/pavo/cells/<eks_cluster_name>/*`
+   SSM parameters; applied **once per deployment cell**.

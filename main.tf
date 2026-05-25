@@ -37,7 +37,13 @@ data "aws_iam_policy_document" "pavo_permission_boundary" {
 }
 
 resource "aws_iam_policy" "pavo_permission_boundary" {
-  name        = "pavo-permission-boundary-${var.instance_id}"
+  # Account-scoped: the workload boundary references no cell/instance resources,
+  # so a single account-shared policy is created once per account. A second
+  # cell's bootstrap run in the same account is a no-op for this resource only
+  # if it shares state; with separate state it would collide (EntityAlready
+  # Exists). Today each customer account has one cell, so run-once-per-cell is
+  # safe; multi-cell support would split this into an account-scoped module.
+  name        = "pavo-permission-boundary-shared"
   description = "Permission boundary for Pavo workload IAM roles. Source: policy-statements.json."
   policy      = data.aws_iam_policy_document.pavo_permission_boundary.json
 }
@@ -67,7 +73,10 @@ data "aws_iam_policy_document" "pavo_eso_trust" {
 }
 
 resource "aws_iam_role" "pavo_eso" {
-  name                 = "pavo-eso-${var.instance_id}"
+  # Cell-scoped: the trust policy is bound to one cluster's OIDC provider, and
+  # ESO is installed once per cell (one external-secrets ServiceAccount per
+  # cluster), so this role is inherently per-cell — keyed on eks_cluster_name.
+  name                 = "pavo-eso-${var.eks_cluster_name}"
   assume_role_policy   = data.aws_iam_policy_document.pavo_eso_trust.json
   permissions_boundary = aws_iam_policy.pavo_permission_boundary.arn
 }
@@ -100,7 +109,7 @@ data "aws_iam_policy_document" "pavo_eso_permissions" {
 }
 
 resource "aws_iam_role_policy" "pavo_eso" {
-  name   = "pavo-eso-policy-${var.instance_id}"
+  name   = "pavo-eso-policy-${var.eks_cluster_name}"
   role   = aws_iam_role.pavo_eso.id
   policy = data.aws_iam_policy_document.pavo_eso_permissions.json
 }
@@ -109,39 +118,44 @@ resource "aws_iam_role_policy" "pavo_eso" {
 # SSM params — integration "API" between bootstrap and workload modules.
 # The workload module reads these values rather than receiving them via
 # Terraform variables (which would require Pavo-side wiring through Omnistrate).
+#
+# Two scopes:
+#   /pavo/cells/<eks_cluster_name>/* — cell-scoped (the cell's VPC/subnets/OIDC
+#     and the per-cell ESO role)
+#   /pavo/shared/*                   — account-scoped (the permission boundaries)
 # ============================================================================
 resource "aws_ssm_parameter" "vpc_id" {
-  name  = "/pavo/${var.instance_id}/vpc_id"
+  name  = "/pavo/cells/${var.eks_cluster_name}/vpc_id"
   type  = "String"
   value = var.vpc_id
 }
 
 resource "aws_ssm_parameter" "private_subnet_ids" {
-  name  = "/pavo/${var.instance_id}/private_subnet_ids"
+  name  = "/pavo/cells/${var.eks_cluster_name}/private_subnet_ids"
   type  = "StringList"
   value = join(",", var.private_subnet_ids)
 }
 
 resource "aws_ssm_parameter" "eks_cluster_name" {
-  name  = "/pavo/${var.instance_id}/eks_cluster_name"
+  name  = "/pavo/cells/${var.eks_cluster_name}/eks_cluster_name"
   type  = "String"
   value = var.eks_cluster_name
 }
 
 resource "aws_ssm_parameter" "eks_oidc_provider" {
-  name  = "/pavo/${var.instance_id}/eks_oidc_provider"
+  name  = "/pavo/cells/${var.eks_cluster_name}/eks_oidc_provider"
   type  = "String"
   value = var.eks_oidc_provider
 }
 
 resource "aws_ssm_parameter" "eso_role_arn" {
-  name  = "/pavo/${var.instance_id}/eso_role_arn"
+  name  = "/pavo/cells/${var.eks_cluster_name}/eso_role_arn"
   type  = "String"
   value = aws_iam_role.pavo_eso.arn
 }
 
 resource "aws_ssm_parameter" "permission_boundary_arn" {
-  name  = "/pavo/${var.instance_id}/permission_boundary_arn"
+  name  = "/pavo/shared/permission_boundary_arn"
   type  = "String"
   value = aws_iam_policy.pavo_permission_boundary.arn
 }
@@ -188,13 +202,13 @@ resource "aws_iam_policy" "pavo_ebs_csi_permission_boundary" {
   # Naming matches the IAMCreateRolesOnlyWithBoundary ArnLike pattern
   # (arn:aws:iam::*:policy/pavo-permission-boundary-*) so the boundary-
   # enforcement condition still allows roles created with this boundary.
-  name        = "pavo-permission-boundary-ebs-csi-${var.instance_id}"
+  name        = "pavo-permission-boundary-ebs-csi-shared"
   description = "Permission boundary for the Pavo EBS CSI driver IRSA role. Source: ebs-csi-policy-statements.json (mirrors AmazonEBSCSIDriverPolicy v14)."
   policy      = data.aws_iam_policy_document.pavo_ebs_csi_permission_boundary.json
 }
 
 resource "aws_ssm_parameter" "ebs_csi_permission_boundary_arn" {
-  name  = "/pavo/${var.instance_id}/ebs_csi_permission_boundary_arn"
+  name  = "/pavo/shared/ebs_csi_permission_boundary_arn"
   type  = "String"
   value = aws_iam_policy.pavo_ebs_csi_permission_boundary.arn
 }
