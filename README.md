@@ -109,6 +109,9 @@ supports multi-cell-per-account.
   namespace, IRSA-annotated with the `pavo-eso-${cluster}` role above.
 - `helm_release.stakater_reloader` — Reloader installed in the `reloader`
   namespace, watching globally for Secret/ConfigMap changes.
+- `helm_release.policy_controller` — Sigstore Policy Controller admission
+  webhook installed in the `cosign-system` namespace. Validates ghcr.io/pavoai
+  images against the per-service ClusterImagePolicy objects below.
 
 ### Kubernetes (cell scope)
 
@@ -122,6 +125,32 @@ supports multi-cell-per-account.
   IngressClass.
 - `kubectl_manifest.pavo_letsencrypt_prod` — cluster-scoped Let's Encrypt
   ClusterIssuer (HTTP-01).
+- `kubectl_manifest.pavo_image_policy` — one cluster-scoped ClusterImagePolicy
+  per Pavo service (for_each over `image-manifest.json`). Binds each
+  `ghcr.io/pavoai/<svc>*` glob to its dedicated Cloud Build signer identity.
+
+### Sigstore policy controller (cell scope)
+
+The Sigstore Policy Controller and the per-service ClusterImagePolicy
+resources are cluster-scoped — there is exactly one owner per EKS cluster,
+which is this module. Per-instance pavoInfra only adds the
+`policy.sigstore.dev/include = "true"` label to each instance namespace; the
+controller picks up labeled namespaces dynamically with no Terraform-graph
+dependency. Operational invariant: **apply `pavo-bootstrap-aws` BEFORE
+expecting policy enforcement on a fresh pavoInfra instance**, because the
+controller has to be up before workloads are admitted.
+
+The service list + image globs come from `image-manifest.json` vendored
+alongside `main.tf` (this module is applied standalone by customers, so the
+wider repo isn't shipped to them). The canonical source is
+`spec/image-manifest.json`; keep `pavo-bootstrap-aws/image-manifest.json` in
+sync when adding a new service.
+
+Mode defaults to `"warn"` (`var.image_policy_mode`); flip to `"enforce"` once
+every Pavo image in the cell is signed + attested. Per-service signer SAs
+are provisioned by `central-ci/`. During the migration window the shared
+`cloud-build@<central_ci_project_id>` SA is also accepted — drop that
+authority once every service has migrated to its dedicated SA.
 
 ### SSM (account + cell scope)
 
@@ -213,9 +242,14 @@ export AWS_REGION=us-east-1           # your region
 | `eks_cluster_name` | EKS cluster name (Omnistrate-provisioned). |
 | `eks_oidc_provider` | EKS OIDC issuer URL **without** the `https://` prefix. |
 | `runner_role_arn` | IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the role ARN (`arn:aws:iam::<acct>:role/<RoleName>`), NOT an assumed-role session ARN. |
+| `image_policy_mode` | Sigstore ClusterImagePolicy enforcement mode for `ghcr.io/pavoai/**` images. `"warn"` (default) admits failing images and emits a Warning to admission callers; `"enforce"` rejects admission. Flip to `"enforce"` once every Pavo image in the cell is signed + attested. |
+| `policy_controller_chart_version` | Helm chart version for `sigstore/policy-controller`. Default `0.10.6`. Bump deliberately and validate in `"warn"` mode first — chart upgrades can change webhook config paths or CRD API versions. |
+| `central_ci_project_id` | GCP project hosting Pavo's central Cloud Build that builds + signs all `ghcr.io/pavoai/*` images. Default `onboarding-455713`. The per-service signing SAs live here as `cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com`. Override only if you've forked the signing pipeline into a different GCP project. |
 
 Populate the first 5 from the Omnistrate console (instance details panel) or
-via `aws eks describe-cluster --name <cluster-name>`.
+via `aws eks describe-cluster --name <cluster-name>`. The 3 Sigstore variables
+default to safe values — override only if you need to flip enforcement mode,
+pin a different chart version, or repoint the signer project.
 
 ### How to get `runner_role_arn`
 

@@ -603,3 +603,148 @@ resource "kubectl_manifest" "pavo_letsencrypt_prod" {
     time_sleep.wait_for_eks_access,
   ]
 }
+
+# ============================================================================
+# Sigstore Policy Controller + per-service ClusterImagePolicies (cell-scoped)
+# ============================================================================
+# The policy controller is a cluster-wide admission webhook. Per the ownership
+# rule "no cluster-scoped K8s resource may live in terraform-omnistrate-aws"
+# (README → Hard rules), both the controller helm release and the per-service
+# ClusterImagePolicy resources are owned here in cell-bootstrap, not pavoInfra.
+# pavoInfra only adds the `policy.sigstore.dev/include = "true"` label to each
+# per-instance namespace; the controller picks up labeled namespaces dynamically.
+#
+# Service list + image globs come from `image-manifest.json` vendored alongside
+# this file (the canonical source is `spec/image-manifest.json`; we vendor
+# because customers apply this module standalone — the wider repo isn't shipped
+# to them). Keep `pavo-bootstrap-aws/image-manifest.json` in sync with
+# `spec/image-manifest.json` when adding a new service.
+#
+# Per-service signer SAs (cloud-build-<service>@<central_ci_project_id>) are
+# provisioned by `central-ci/`. During the migration window the shared
+# `cloud-build@...` SA is also accepted (the `pavo-cloud-build-shared-transition`
+# authority below) — drop that entry once every Pavo service has been re-signed
+# under its per-service SA.
+
+resource "helm_release" "policy_controller" {
+  name             = "policy-controller"
+  repository       = "https://sigstore.github.io/helm-charts"
+  chart            = "policy-controller"
+  version          = var.policy_controller_chart_version
+  namespace        = "cosign-system"
+  create_namespace = true
+
+  wait          = true
+  wait_for_jobs = true
+  timeout       = 600
+
+  # webhook.replicaCount=2 for HA; webhook.configData.no-match-policy=allow is
+  # critical — the chart default is REJECT, which would block every non-Pavo
+  # image in any labeled Pavo namespace (kube-system, app sidecars from random
+  # registries, etc.). We only want to enforce on ghcr.io/pavoai/** via the
+  # ClusterImagePolicies below; everything else admits unchanged.
+  values = [
+    yamlencode({
+      webhook = {
+        replicaCount = 2
+        configData = {
+          "no-match-policy" = "allow"
+        }
+      }
+    })
+  ]
+
+  depends_on = [
+    aws_ssm_parameter.single_cell_guard,
+    time_sleep.wait_for_eks_access,
+  ]
+}
+
+locals {
+  image_manifest = jsondecode(file("${path.module}/image-manifest.json"))
+  # Trailing `*` is REQUIRED. Sigstore policy-controller globs use Go
+  # `filepath.Match` semantics against the full image reference
+  # (`ghcr.io/pavoai/<svc>:<tag>` or `@sha256:...`), so a bare
+  # `ghcr.io/pavoai/<svc>` only matches the no-tag/no-digest form — which
+  # production pulls never use. Combined with `webhook.no-match-policy=allow`,
+  # missing the wildcard would silently bypass enforcement on every Pavo image.
+  service_image_globs = {
+    for service, cfg in local.image_manifest.services :
+    service => [for img in cfg.images : "ghcr.io/pavoai/${img.ghcr_name}*"]
+  }
+}
+
+resource "kubectl_manifest" "pavo_image_policy" {
+  for_each = local.service_image_globs
+
+  server_side_apply = true
+  force_conflicts   = true
+  field_manager     = "terraform"
+  apply_only        = true # NEVER delete on teardown — shared cluster resource
+
+  yaml_body = yamlencode({
+    apiVersion = "policy.sigstore.dev/v1beta1"
+    kind       = "ClusterImagePolicy"
+    metadata = {
+      name = "pavo-${each.key}"
+    }
+    spec = {
+      mode   = var.image_policy_mode
+      images = [for glob in each.value : { glob = glob }]
+      authorities = [
+        {
+          name = "pavo-cloud-build-${each.key}"
+          keyless = {
+            url = "https://fulcio.sigstore.dev"
+            identities = [
+              {
+                issuer  = "https://accounts.google.com"
+                subject = "cloud-build-${each.key}@${var.central_ci_project_id}.iam.gserviceaccount.com"
+              }
+            ]
+          }
+          ctlog = {
+            url = "https://rekor.sigstore.dev"
+          }
+          attestations = [
+            {
+              name          = "require-sbom"
+              predicateType = "https://cyclonedx.org/bom"
+            },
+            {
+              name          = "require-vuln"
+              predicateType = "https://cosign.sigstore.dev/attestation/vuln/v1"
+            },
+          ]
+        },
+        {
+          name = "pavo-cloud-build-shared-transition"
+          keyless = {
+            url = "https://fulcio.sigstore.dev"
+            identities = [
+              {
+                issuer  = "https://accounts.google.com"
+                subject = "cloud-build@${var.central_ci_project_id}.iam.gserviceaccount.com"
+              }
+            ]
+          }
+          ctlog = {
+            url = "https://rekor.sigstore.dev"
+          }
+          attestations = [
+            {
+              name          = "require-sbom"
+              predicateType = "https://cyclonedx.org/bom"
+            },
+            {
+              name          = "require-vuln"
+              predicateType = "https://cosign.sigstore.dev/attestation/vuln/v1"
+            },
+          ]
+        },
+      ]
+    }
+  })
+
+  depends_on = [helm_release.policy_controller]
+}
