@@ -6,45 +6,130 @@ applied **once per deployment cell** (one EKS cluster) by you (the customer),
 before Pavo's workload Terraform runs. It does not depend on a Pavo instance
 ID, so it can run as soon as the deployment cell exists.
 
+## Source of truth & versioning
+
+This module's source of truth is the [`pavo-bootstrap-aws/` subdirectory of
+`pavoai/pavo-terraform-templates`](https://github.com/pavoai/pavo-terraform-templates/tree/main/pavo-bootstrap-aws),
+mirrored to [`pavoai/pavo-bootstrap-aws`](https://github.com/pavoai/pavo-bootstrap-aws)
+for customer consumption.
+
+**Two lanes** on the mirror:
+
+- **`main`** — continuously updated snapshot of the latest source. Useful for
+  review, dev, and reading the latest docs.
+- **`v*` tags** — manually-cut stable checkpoints (semver). What customers
+  should pin to in production.
+
+```hcl
+# Production deployments: pin to a tag.
+module "pavo_bootstrap" {
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.2.0"
+  # ...
+}
+
+# Review / dev only: track main.
+module "pavo_bootstrap" {
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=main"
+  # ...
+}
+```
+
+Cutting a new stable tag (`bootstrap-vMAJOR.MINOR.PATCH` on the source repo)
+publishes a `vMAJOR.MINOR.PATCH` snapshot to the mirror; pushes to the source
+`main` branch that touch this subdir are auto-mirrored to the mirror's `main`.
+
 ## Resource scopes
 
 The resources this module creates fall into two scopes:
 
-- **Account-scoped** — the two IAM permission boundaries. They reference no
-  cell/instance resources, so they are shared across the whole AWS account.
-- **Cell-scoped** — the ESO IRSA role (its trust policy is bound to one
-  cluster's OIDC provider) and the cell's network metadata.
+- **Account-scoped** — the two IAM permission boundaries and the single-cell
+  sentinel SSM parameter. They reference no cell/instance resources, so they are
+  shared across the whole AWS account.
+- **Cell-scoped** — the ESO IRSA role + ESO Helm release, the EBS CSI driver IRSA
+  wiring (IAM role + SA annotation + RBAC), the Reloader Helm release, the
+  `pd-balanced` StorageClass, the `pavo-nginx` IngressClass, the Let's Encrypt
+  ClusterIssuer, the EKS access entry for the Omnistrate runner, and the cell's
+  network metadata.
 
 **Short-term design:** a single bootstrap module, run **once per cell**. It
 creates the account-shared permission boundaries (stable `-shared` names) and
-the cell-scoped ESO role (keyed on the cluster name) together in one apply.
-**This assumes one deployment cell per AWS account.** A second cell in the same
-account would collide on the shared permission-boundary IAM names — see
-*Scoping notes* below for the limitation and the planned module split.
+the full cell-scoped K8s/Helm/IAM stack (keyed on the cluster name) together in
+one apply. **This assumes one deployment cell per AWS account.**
+
+A **single-cell-per-account sentinel** (`/pavo/shared/bootstrap_cell` SSM
+parameter, `prevent_destroy = true`) is the hard guard: a second cell's apply
+in the same account hits AWS `ParameterAlreadyExists` on this name and fails
+**before** any IAM boundary, role, or K8s resource is created. To inspect:
+
+```bash
+aws ssm get-parameter --name /pavo/shared/bootstrap_cell \
+  --query 'Parameter.Value' --output text
+# prints the cluster name this account was bootstrapped for
+```
+
+See *Scoping notes* below for the planned account/cell module split that fully
+supports multi-cell-per-account.
 
 ## What it creates
 
-- **1 IAM role**: `pavo-eso-${eks_cluster_name}` — IRSA role assumed by the
-  External Secrets Operator running in your EKS cluster, used to read the
-  RDS-managed master password secret from your AWS Secrets Manager and decrypt
-  it via your CMK.
-- **1 inline role policy**: `pavo-eso-policy-${eks_cluster_name}` — grants the
-  ESO role `secretsmanager:GetSecretValue` / `DescribeSecret` on `rds!*` and
-  `pavo-*` secrets, plus `kms:Decrypt` / `DescribeKey` scoped via
+### IAM (account + cell scope)
+
+- **2 IAM roles** (cell-scoped):
+  - `pavo-eso-${eks_cluster_name}` — IRSA role assumed by the External Secrets
+    Operator running in your EKS cluster, used to read the RDS-managed master
+    password secret from your AWS Secrets Manager and decrypt it via your CMK.
+  - `pavo-ebs-csi-<cluster-prefix>-<cell-hash>` — IRSA role for the
+    `kube-system/ebs-csi-controller-sa` ServiceAccount. The cell-hash suffix
+    keeps the name unique even when `<eks_cluster_name>` gets truncated to fit
+    IAM's 64-char role-name limit (prefix-55 + dash + hash-8 = 64).
+- **1 inline role policy**: `pavo-eso-policy-${eks_cluster_name}` — grants ESO
+  `secretsmanager:GetSecretValue` / `DescribeSecret` on `rds!*` and `pavo-*`
+  secrets, plus `kms:Decrypt` / `DescribeKey` scoped via
   `kms:ViaService = secretsmanager.<region>.amazonaws.com`.
-- **2 IAM policies (permission boundaries)**:
-  - `pavo-permission-boundary-shared` — workload boundary attached to
-    Pavo's app IAM role (`pavo-role-*`). Source of truth:
-    `policy-statements.json`.
-  - `pavo-permission-boundary-ebs-csi-shared` — separate boundary for
-    the EBS CSI driver IRSA role. Mirrors `AmazonEBSCSIDriverPolicy`. Source:
+- **1 attached managed policy**: `AmazonEBSCSIDriverPolicy` attached to the
+  EBS CSI role above.
+- **2 IAM policies (permission boundaries, account-scoped)**:
+  - `pavo-permission-boundary-shared` — workload boundary attached to Pavo's
+    app IAM role (`pavo-role-*`). Source of truth: `policy-statements.json`.
+  - `pavo-permission-boundary-ebs-csi-shared` — separate boundary for the EBS
+    CSI driver IRSA role. Mirrors `AmazonEBSCSIDriverPolicy`. Source:
     `ebs-csi-policy-statements.json`.
-- **7 SSM parameters**:
-  - **5 cell-scoped** under `/pavo/cells/${eks_cluster_name}/`: `vpc_id`,
-    `private_subnet_ids`, `eks_cluster_name`, `eks_oidc_provider`,
-    `eso_role_arn`.
-  - **2 account-scoped** under `/pavo/shared/`: `permission_boundary_arn`,
-    `ebs_csi_permission_boundary_arn`.
+
+### EKS (cell scope)
+
+- **1 EKS access entry** (`aws_eks_access_entry.runner`) + cluster-admin policy
+  association — grants the Omnistrate Terraform runner cluster-admin RBAC on
+  the cell. Principal is `var.runner_role_arn`. Pre-rescope this lived in
+  `terraform-omnistrate-aws/` and was created on every instance create; now
+  it's created once here per cell.
+
+### Helm (cell scope)
+
+- `helm_release.external_secrets` — ESO installed in the `external-secrets`
+  namespace, IRSA-annotated with the `pavo-eso-${cluster}` role above.
+- `helm_release.stakater_reloader` — Reloader installed in the `reloader`
+  namespace, watching globally for Secret/ConfigMap changes.
+
+### Kubernetes (cell scope)
+
+- `kubernetes_annotations.ebs_csi_sa` — patches the `eks.amazonaws.com/role-arn`
+  annotation on `kube-system/ebs-csi-controller-sa`.
+- `kubernetes_role.ebs_csi_leases` + RoleBinding in `kube-system` — RBAC the
+  EBS CSI controller needs for leader election.
+- `kubernetes_storage_class_v1.ebs_gp3` — `pd-balanced` cluster-scoped
+  StorageClass (gp3, name matches GCP convention used by connector PVCs).
+- `kubectl_manifest.pavo_ingress_class` — cluster-scoped `pavo-nginx`
+  IngressClass.
+- `kubectl_manifest.pavo_letsencrypt_prod` — cluster-scoped Let's Encrypt
+  ClusterIssuer (HTTP-01).
+
+### SSM (account + cell scope)
+
+- **5 cell-scoped** under `/pavo/cells/${eks_cluster_name}/`: `vpc_id`,
+  `private_subnet_ids`, `eks_cluster_name`, `eks_oidc_provider`, `eso_role_arn`.
+- **3 account-scoped** under `/pavo/shared/`: `permission_boundary_arn`,
+  `ebs_csi_permission_boundary_arn`, `bootstrap_cell` (the single-cell sentinel
+  described under *Resource scopes*; `prevent_destroy = true`).
 
 ## Configuring Terraform state (REQUIRED)
 
@@ -100,7 +185,23 @@ For Terraform Cloud / HCP Terraform / other backends, see
 - AWS account with admin credentials configured (`aws sts get-caller-identity`
   works).
 - EKS cluster + VPC already provisioned by Omnistrate's CFN bootstrap stack.
-- AWS CLI ≥ v2.
+- **CLIs on PATH**: `aws` (≥ v2), `kubectl`, `helm`. Bootstrap now creates K8s
+  + Helm resources on the cell's cluster, so all three are required.
+- **Cluster-admin RBAC on the EKS cluster** from the principal running
+  `terraform apply`. The Omnistrate CFN-provisioned cluster typically grants
+  this via the AdministratorAccess SSO role; if your principal doesn't have
+  it, see *Case B: bootstrapping without K8s admin* below.
+
+Run **`scripts/preflight.sh`** before `terraform init` — it verifies CLI
+presence, AWS creds, cluster reachability, and cluster-admin RBAC. Hard gate is
+`kubectl auth can-i '*' '*' --all-namespaces`. The script refreshes your
+kubeconfig as a side-effect.
+
+```bash
+export EKS_CLUSTER_NAME=hc-fmnwao4ct  # your cluster name
+export AWS_REGION=us-east-1           # your region
+./scripts/preflight.sh
+```
 
 ## Variables
 
@@ -111,14 +212,43 @@ For Terraform Cloud / HCP Terraform / other backends, see
 | `private_subnet_ids` | Private subnet IDs (Omnistrate-tagged `kubernetes.io/role/internal-elb=1`). |
 | `eks_cluster_name` | EKS cluster name (Omnistrate-provisioned). |
 | `eks_oidc_provider` | EKS OIDC issuer URL **without** the `https://` prefix. |
+| `runner_role_arn` | IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the role ARN (`arn:aws:iam::<acct>:role/<RoleName>`), NOT an assumed-role session ARN. |
 
-Populate from the Omnistrate console (instance details panel) or via
-`aws eks describe-cluster --name <cluster-name>`.
+Populate the first 5 from the Omnistrate console (instance details panel) or
+via `aws eks describe-cluster --name <cluster-name>`.
+
+### How to get `runner_role_arn`
+
+The runner role is the IAM role Omnistrate uses to apply Terraform inside your
+account. It's the role that needs cluster-admin RBAC on the EKS cluster so
+`terraform-omnistrate-aws/` (pavoInfra) can manage per-instance K8s resources.
+
+You'll typically find it in the Omnistrate UI under your account integration
+page, OR by listing the IAM roles in your AWS account whose name starts with
+`omnistrate-`:
+
+```bash
+aws iam list-roles \
+  --query 'Roles[?starts_with(RoleName, `omnistrate-`) || contains(RoleName, `omnistrate`)].[RoleName,Arn]' \
+  --output table
+```
+
+Pick the role that Omnistrate's runner assumes — usually
+`omnistrate-custom-terraform-role-for-sm-<id>` or similar — and use its
+**role ARN** (the `arn:aws:iam::...:role/...` form). If you get an assumed-role
+session ARN instead (`arn:aws:sts::...:assumed-role/.../session-name`), strip
+the trailing `/<session-name>` and replace
+`:sts::<acct>:assumed-role/` with `:iam::<acct>:role/`.
+
+The `variables.tf` validation rejects assumed-role ARN shapes with a clear
+error pointing back to this section.
 
 ## Apply
 
 ```bash
-terraform init <see above>
+./scripts/preflight.sh
+# Configure backend.tf first (see "Configuring Terraform state" above), then:
+terraform init
 terraform plan
 terraform apply
 ```
@@ -127,6 +257,52 @@ Capture outputs (especially `eso_role_arn` — needed for the CMK key policy):
 
 ```bash
 terraform output
+```
+
+## Case B: bootstrapping without K8s admin
+
+If `scripts/preflight.sh` fails on the `kubectl auth can-i '*' '*' --all-namespaces`
+hard gate, the principal running `terraform apply` lacks cluster-admin RBAC on
+the EKS cluster. Bootstrap can't create the EKS access entry for the Omnistrate
+runner (that's exactly what it's trying to do) without already having access.
+
+**Remediation** — create a one-off access entry for your principal manually,
+then re-run bootstrap. The bootstrap apply will then add a separate access
+entry for `var.runner_role_arn`; the one-off entry stays out of Terraform state
+and can be removed afterwards.
+
+```bash
+# Get your current principal's underlying role ARN (NOT the assumed-role form):
+MY_ROLE_ARN=$(aws sts get-caller-identity --query Arn --output text \
+  | sed 's|:sts::|:iam::|; s|:assumed-role/|:role/|; s|/[^/]*$||')
+
+# Create the access entry + admin policy association:
+aws eks create-access-entry \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --principal-arn "$MY_ROLE_ARN" \
+  --region "$AWS_REGION"
+
+aws eks associate-access-policy \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --principal-arn "$MY_ROLE_ARN" \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster \
+  --region "$AWS_REGION"
+
+# Re-run preflight; it should now pass.
+./scripts/preflight.sh
+
+# Apply.
+terraform apply
+
+# Optional cleanup: once bootstrap has run, the one-off access entry for your
+# principal is no longer required (bootstrap created a permanent one for the
+# Omnistrate runner). Remove it if your governance prefers no out-of-band
+# access entries:
+aws eks delete-access-entry \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --principal-arn "$MY_ROLE_ARN" \
+  --region "$AWS_REGION"
 ```
 
 ## Setting up the CMK (separate from bootstrap; before workload deploys)
@@ -239,22 +415,55 @@ This is a multi-step manual procedure; coordinate with Pavo support.
 
 ## Scoping notes
 
-This module's resources are **account-scoped** (the permission boundaries) and
-**cell-scoped** (the ESO role + network metadata) — see *Resource scopes*
-above. There is exactly one ESO IRSA role per cell: the External Secrets
-Operator is installed once per cluster (one `external-secrets` ServiceAccount),
-so the role is shared by every Pavo instance on that cell.
+This module's resources are **account-scoped** (the permission boundaries + the
+single-cell sentinel) and **cell-scoped** (the ESO + EBS CSI IRSA roles, the
+Helm releases, the cluster-scoped K8s resources, the EKS access entry, and the
+cell's network metadata) — see *Resource scopes* above.
 
 **Limitation — one deployment cell per account.** This is a single module run
 once per cell that creates account-scoped *and* cell-scoped resources together.
 Running it for a **second cell in the same account** re-creates the
-account-scoped `-shared` permission boundaries from fresh state and collides
-(`EntityAlreadyExists`) — the boundary names are account-global, so the second
-run cannot succeed.
+account-scoped `-shared` permission boundaries from fresh state and would
+collide (`EntityAlreadyExists`) — the boundary names are account-global.
+
+**Today's hard guard.** The `/pavo/shared/bootstrap_cell` SSM sentinel
+(`prevent_destroy = true`) is the structural defense. A second bootstrap apply
+in the same account hits AWS `ParameterAlreadyExists` on this name and fails
+**before** any IAM boundary, role, or K8s resource is touched. The
+`depends_on = [aws_ssm_parameter.single_cell_guard]` on every shared resource
+serializes everything behind the sentinel; the first error is the cleanest
+possible one.
 
 **Planned follow-up — split the module** so multi-cell accounts are supported:
 
 1. *account bootstrap* — the two shared permission boundaries + `/pavo/shared/*`
-   SSM parameters; applied **once per AWS account**.
-2. *cell bootstrap* — the ESO IRSA role + `/pavo/cells/<eks_cluster_name>/*`
+   SSM parameters + the sentinel; applied **once per AWS account**.
+2. *cell bootstrap* — the ESO + EBS CSI IRSA roles, Helm releases, EKS access
+   entry, cluster-scoped K8s resources, and `/pavo/cells/<eks_cluster_name>/*`
    SSM parameters; applied **once per deployment cell**.
+
+## Ownership rules
+
+Resources are scoped at one of four levels. The level determines which
+module owns the resource, who applies it, and where state lives.
+
+| Scope | Module | Applier | State backend | Examples |
+|---|---|---|---|---|
+| **Account** | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IAM permission boundaries, `/pavo/shared/*` SSM |
+| **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EBS CSI role, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
+| **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | GCS `gs://pavo-terraform-state`, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
+| **Instance** (one Pavo deployment) | `terraform-omnistrate-aws/` | Omnistrate runner | Omnistrate-managed | RDS, ElastiCache, S3, SNS/SQS, EFS, workload IAM role, app namespace, app secrets, Elastic Cloud deployment |
+
+### Picking the right module for a new resource
+
+1. If deleting one Pavo instance shouldn't delete it → not `terraform-omnistrate-aws/`.
+2. If its `name` doesn't include `var.instance_id` → probably not `terraform-omnistrate-aws/`.
+3. If it lives in Pavo's identity tenant (Zitadel) → `pavo-customer-bootstrap/`.
+4. If it's cluster-scoped K8s or per-cell IAM → `pavo-bootstrap-aws/`.
+5. Otherwise (per-instance app resource) → `terraform-omnistrate-aws/`.
+
+### Hard rules
+
+- No cluster-scoped K8s resource may live in `terraform-omnistrate-aws/`, even with `apply_only = true` as a mitigation.
+- `pavo-customer-bootstrap/` MUST NOT declare `instance_id` as a variable (structural enforcement of the customer-hostname invariant).
+- A second cell in the same AWS account is currently guarded by an SSM sentinel — see `pavo-bootstrap-aws/README.md`.
