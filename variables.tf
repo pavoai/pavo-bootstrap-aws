@@ -3,19 +3,6 @@ variable "aws_region" {
   type        = string
 }
 
-variable "instance_id" {
-  description = "Pavo deployment instance ID (matches Omnistrate's sys.id). Used in: K8s namespace, IAM role/policy names (pavo-*-<instance_id>), ClusterSecretStore name, SSM parameter paths. Constrained to satisfy the intersection of K8s namespace + IAM role name rules: lowercase alphanumeric + hyphens, no leading/trailing hyphen, max 40 characters (leaves headroom for the longest derived name 'pavo-permission-boundary-<instance_id>' which must fit in IAM's 64-char role-name limit)."
-  type        = string
-
-  validation {
-    condition = (
-      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.instance_id))
-      && length(var.instance_id) <= 40
-    )
-    error_message = "instance_id must be 1-40 characters, lowercase alphanumeric and hyphens only, and must not start or end with a hyphen."
-  }
-}
-
 variable "vpc_id" {
   description = "VPC ID where the EKS cluster runs (Omnistrate-provisioned)."
   type        = string

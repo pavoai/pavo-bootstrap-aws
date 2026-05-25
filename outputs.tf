@@ -13,7 +13,12 @@ output "ebs_csi_permission_boundary_arn" {
   value       = aws_iam_policy.pavo_ebs_csi_permission_boundary.arn
 }
 
-output "ssm_param_prefix" {
-  description = "SSM Parameter Store prefix for bootstrap state."
-  value       = "/pavo/${var.instance_id}"
+output "ssm_shared_prefix" {
+  description = "SSM Parameter Store prefix for account-scoped bootstrap state (permission boundaries)."
+  value       = "/pavo/shared"
+}
+
+output "ssm_cell_prefix" {
+  description = "SSM Parameter Store prefix for cell-scoped bootstrap state (VPC/subnets/OIDC, ESO role ARN)."
+  value       = "/pavo/cells/${var.eks_cluster_name}"
 }
