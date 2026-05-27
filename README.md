@@ -160,6 +160,102 @@ authority once every service has migrated to its dedicated SA.
   `ebs_csi_permission_boundary_arn`, `bootstrap_cell` (the single-cell sentinel
   described under *Resource scopes*; `prevent_destroy = true`).
 
+## Permission boundary scoping & verification
+
+The workload boundary (`policy-statements.json` → `pavo-permission-boundary-shared`)
+uses two scoping patterns depending on whether the service supports name-prefix
+ARNs:
+
+- **Name-prefix ARN scoping** (RDS, ElastiCache, S3, SNS, SQS, IAM, SSM, KMS via
+  `kms:ViaService`): every Pavo-created resource is named `pavo-*`. Mutating
+  actions are scoped to `arn:aws:<service>:*:*:<type>:pavo-*`.
+- **Tag-based conditional scoping** (EFS): EFS ARNs use auto-generated IDs
+  (`fs-XXXX`), so name-prefix doesn't apply. Instead the boundary requires the
+  `managed_by=pavo` tag, which `terraform-omnistrate-aws` attaches to every
+  resource via the AWS provider's `default_tags`:
+  - `CreateFileSystem` requires `aws:RequestTag/managed_by = pavo` (Terraform's
+    `default_tags` puts this in the create-call automatically).
+  - All other EFS mutating actions require `aws:ResourceTag/managed_by = pavo`.
+
+**Footgun**: if `managed_by` is removed from a Pavo EFS file system (via direct
+AWS CLI, not Terraform), subsequent mutations on it will fail — including
+re-tagging it. Don't strip the tag.
+
+**Describe / List actions stay wildcard** (`"resources": ["*"]`) by AWS IAM
+design — those actions don't accept resource-level permissions. Same constraint
+applies to `s3:ListAllMyBuckets`, `sns:ListTopics`, etc. (also `*` in this file).
+Read-only metadata; no data access.
+
+### Verifying boundary edits locally
+
+After editing `policy-statements.json`, re-render the committed snapshot and
+run the simulation matrix.
+
+**1. Re-render the snapshot** (required — CI fails if drift exists):
+
+```bash
+scripts/render-policy.sh pavo-bootstrap-aws/policy-statements.json \
+  | jq . > pavo-bootstrap-aws/rendered-permission-boundary.json
+```
+
+**2. Simulate the matrix** (requires AWS creds + `boto3`):
+
+```bash
+pip install boto3
+scripts/simulate-policy.py
+```
+
+The script uses `aws iam simulate-custom-policy` with the boundary fed through
+`--permissions-boundary-policy-input-list` against an allow-all identity policy,
+so the simulation reflects how the boundary actually behaves in production
+(capping the identity policy, not acting as one). It tests ~20 cases including:
+
+- RDS / ElastiCache / EFS read-only on `*` → allowed
+- RDS / ElastiCache mutations on `pavo-*` ARNs → allowed
+- RDS / ElastiCache mutations on non-`pavo-*` ARNs → denied
+- EFS `CreateFileSystem` with `aws:RequestTag/managed_by=pavo` → allowed
+- EFS `CreateFileSystem` without the request tag → denied
+- EFS mutations with `aws:ResourceTag/managed_by=pavo` → allowed
+- EFS mutations without the resource tag → denied
+- S3 / SQS sanity (existing scopings still work)
+
+Any caller with `iam:SimulateCustomPolicy` permission works — the simulation is
+account-agnostic.
+
+### Migrating existing customers when boundary changes
+
+Customers who applied this module **before** the EFS tag-scoping change need a
+one-time tag backfill on the existing EFS file system, **before** re-applying
+the bootstrap with the new boundary. Without the backfill, the new boundary
+would block all mutations on the pre-existing un-tagged file system.
+
+For `awstest`:
+
+```bash
+# 1. Find the awstest EFS file system ID.
+aws efs describe-file-systems --region us-east-1 \
+  --query "FileSystems[?starts_with(Name, 'pavo-efs-')].FileSystemId" --output text
+
+# 2. Backfill all 4 Pavo standard tags (use the actual instance ID for omnistrate_instance).
+aws efs tag-resource \
+  --resource-id <fs-id-from-step-1> \
+  --tags \
+    Key=managed_by,Value=pavo \
+    Key=customer,Value=awstest \
+    Key=environment,Value=prod \
+    Key=omnistrate_instance,Value=<awstest-omnistrate-instance-id>
+
+# 3. Verify all 4 tags present.
+aws efs describe-tags --file-system-id <fs-id-from-step-1>
+
+# 4. Re-apply the bootstrap module (refreshes the permission boundary in IAM).
+terraform -chdir=pavo-bootstrap-aws apply
+```
+
+New customers (e.g. Coursera): no migration needed. They get the tightened
+boundary on first apply — `terraform-omnistrate-aws` provider default_tags
+applies `managed_by=pavo` to every EFS file system on creation.
+
 ## Configuring Terraform state (REQUIRED)
 
 **Do not run with local state.** Before running `terraform init`, you MUST

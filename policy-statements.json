@@ -1,15 +1,34 @@
 [
   {
-    "sid": "RDS",
+    "sid": "RDSReadOnly",
     "effect": "Allow",
-    "actions": ["rds:*"],
+    "actions": ["rds:Describe*", "rds:List*"],
     "resources": ["*"]
   },
   {
-    "sid": "ElastiCache",
+    "sid": "RDSMutatingPavoResources",
+    "effect": "Allow",
+    "actions": ["rds:*"],
+    "resources": [
+      "arn:aws:rds:*:*:db:pavo-*",
+      "arn:aws:rds:*:*:subgrp:pavo-*",
+      "arn:aws:rds:*:*:snapshot:pavo-*"
+    ]
+  },
+  {
+    "sid": "ElastiCacheReadOnly",
+    "effect": "Allow",
+    "actions": ["elasticache:Describe*", "elasticache:List*"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "ElastiCacheMutatingPavoResources",
     "effect": "Allow",
     "actions": ["elasticache:*"],
-    "resources": ["*"]
+    "resources": [
+      "arn:aws:elasticache:*:*:replicationgroup:pavo-*",
+      "arn:aws:elasticache:*:*:subnetgroup:pavo-*"
+    ]
   },
   {
     "sid": "S3",
@@ -33,10 +52,32 @@
     "resources": ["arn:aws:sqs:*:*:pavo-*"]
   },
   {
-    "sid": "EFS",
+    "sid": "EFSReadOnly",
+    "effect": "Allow",
+    "actions": ["elasticfilesystem:Describe*", "elasticfilesystem:List*"],
+    "resources": ["*"]
+  },
+  {
+    "sid": "EFSCreateFileSystemWithRequestTag",
+    "effect": "Allow",
+    "actions": ["elasticfilesystem:CreateFileSystem"],
+    "resources": ["*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "pavo"
+      }
+    }
+  },
+  {
+    "sid": "EFSMutatingTaggedPavoResources",
     "effect": "Allow",
     "actions": ["elasticfilesystem:*"],
-    "resources": ["*"]
+    "resources": ["*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      }
+    }
   },
   {
     "sid": "EKSAccessAndDescribe",
