@@ -60,16 +60,16 @@ variable "runner_role_arn" {
 variable "image_policy_mode" {
   description = <<-EOT
     Sigstore ClusterImagePolicy enforcement mode for ghcr.io/pavoai/** images.
-    - "warn":    admit images that fail verification, emit Warning to admission caller
-                 (and controller log entry). Use during Phase A signing bake-in.
-    - "enforce": reject admission of images that fail verification. Use once Phase A
-                 has signed + attested every live Pavo image in the cell.
+    - "enforce" (default): reject admission of images that fail verification.
+    - "warn":              admit images that fail verification, emit Warning to
+                           admission caller (and controller log entry). Reserved
+                           for one-off signing-bake-in on a fresh image lineup.
     The policy verifies: cosign signature + CycloneDX SBOM attestation presence +
     cosign-vuln attestation presence. Attestation CONTENT is not inspected — CVE
     gating happens in central-ci's signing pipeline.
   EOT
   type        = string
-  default     = "warn"
+  default     = "enforce"
   validation {
     condition     = contains(["warn", "enforce"], var.image_policy_mode)
     error_message = "image_policy_mode must be \"warn\" or \"enforce\"."
