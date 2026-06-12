@@ -40,12 +40,12 @@
     },
     "tribal-knowledge": {
       "images": [
-        { "yq_path": ".applications.query-service.image.tag", "ghcr_name": "query-service" },
-        { "yq_path": ".applications.entity-tribal.image.tag", "ghcr_name": "entity-tribal" },
-        { "yq_path": ".applications.tribal-generator.image.tag", "ghcr_name": "tribal-generator" },
-        { "yq_path": ".applications.data-task-generator.image.tag", "ghcr_name": "data-task-generator" },
-        { "yq_path": ".applications.pre-aggregate-generator.image.tag", "ghcr_name": "pre-aggregate-generator" },
-        { "yq_path": ".applications.gcc-generator.image.tag", "ghcr_name": "gcc-generator" }
+        { "yq_path": ".applications.query-service.image.tag", "ghcr_name": "tribal-query-service" },
+        { "yq_path": ".applications.entity-tribal.image.tag", "ghcr_name": "tribal-entity-tribal" },
+        { "yq_path": ".applications.tribal-generator.image.tag", "ghcr_name": "tribal-tribal-generator" },
+        { "yq_path": ".applications.data-task-generator.image.tag", "ghcr_name": "tribal-data-task-generator" },
+        { "yq_path": ".applications.pre-aggregate-generator.image.tag", "ghcr_name": "tribal-pre-aggregate-generator" },
+        { "yq_path": ".applications.gcc-generator.image.tag", "ghcr_name": "tribal-gcc-generator" }
       ]
     }
   }

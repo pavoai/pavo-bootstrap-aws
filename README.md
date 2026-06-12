@@ -146,11 +146,14 @@ wider repo isn't shipped to them). The canonical source is
 `spec/image-manifest.json`; keep `pavo-bootstrap-aws/image-manifest.json` in
 sync when adding a new service.
 
-Mode defaults to `"warn"` (`var.image_policy_mode`); flip to `"enforce"` once
-every Pavo image in the cell is signed + attested. Per-service signer SAs
-are provisioned by `central-ci/`. During the migration window the shared
+Mode defaults to `"enforce"` (`var.image_policy_mode`) — admission rejects any
+`ghcr.io/pavoai/**` image that fails cosign signature, SBOM attestation, or
+vuln attestation verification. Per-service signer SAs are provisioned by
+`central-ci/`. During the migration window the shared
 `cloud-build@<central_ci_project_id>` SA is also accepted — drop that
-authority once every service has migrated to its dedicated SA.
+authority once every service has migrated to its dedicated SA. Set to
+`"warn"` only for a one-off bake-in on a fresh image lineup before the first
+enforce-mode apply.
 
 ### SSM (account + cell scope)
 
@@ -338,8 +341,8 @@ export AWS_REGION=us-east-1           # your region
 | `eks_cluster_name` | EKS cluster name (Omnistrate-provisioned). |
 | `eks_oidc_provider` | EKS OIDC issuer URL **without** the `https://` prefix. |
 | `runner_role_arn` | IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the role ARN (`arn:aws:iam::<acct>:role/<RoleName>`), NOT an assumed-role session ARN. |
-| `image_policy_mode` | Sigstore ClusterImagePolicy enforcement mode for `ghcr.io/pavoai/**` images. `"warn"` (default) admits failing images and emits a Warning to admission callers; `"enforce"` rejects admission. Flip to `"enforce"` once every Pavo image in the cell is signed + attested. |
-| `policy_controller_chart_version` | Helm chart version for `sigstore/policy-controller`. Default `0.10.6`. Bump deliberately and validate in `"warn"` mode first — chart upgrades can change webhook config paths or CRD API versions. |
+| `image_policy_mode` | Sigstore ClusterImagePolicy enforcement mode for `ghcr.io/pavoai/**` images. `"enforce"` (default) rejects admission of images that fail verification; `"warn"` admits them and emits a Warning to admission callers (reserved for one-off signing-bake-in on a fresh image lineup). |
+| `policy_controller_chart_version` | Helm chart version for `sigstore/policy-controller`. Default `0.10.6`. Bump deliberately and validate by setting `image_policy_mode = "warn"` for the upgrade apply — chart upgrades can change webhook config paths or CRD API versions. |
 | `central_ci_project_id` | GCP project hosting Pavo's central Cloud Build that builds + signs all `ghcr.io/pavoai/*` images. Default `onboarding-455713`. The per-service signing SAs live here as `cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com`. Override only if you've forked the signing pipeline into a different GCP project. |
 
 Populate the first 5 from the Omnistrate console (instance details panel) or
