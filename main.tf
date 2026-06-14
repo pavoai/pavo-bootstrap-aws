@@ -2,7 +2,7 @@ data "aws_caller_identity" "current" {}
 
 # ============================================================================
 # Workload permission boundary — driven by policy-statements.json (single
-# source of truth, also surfaced into spec/spec-aws-byoc.yaml by CI).
+# source of truth, also surfaced into spec/spec-byoc.yaml by CI).
 # ============================================================================
 locals {
   policy_statements = jsondecode(file("${path.module}/policy-statements.json"))
