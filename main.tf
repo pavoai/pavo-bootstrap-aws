@@ -352,6 +352,52 @@ resource "helm_release" "external_secrets" {
 }
 
 # ============================================================================
+# Elastic Cloud on Kubernetes (ECK) operator — Helm release (cell-scoped)
+# ============================================================================
+# Cluster-global CRDs + operator for self-hosted Elasticsearch (per-instance
+# es_mode = self_hosted). Opt-in per cell via var.enable_eck — harmless but
+# unnecessary on cells with only Elastic-Cloud instances.
+#
+# Deliberately NOT here (validated live on hc-fmnwao4ct):
+#   - vm.max_map_count sysctl (ES >= 8.16 prereq): the Omnistrate node AMI is
+#     Bottlerocket, which already ships vm.max_map_count=1048576. No DaemonSet.
+#   - S3 gateway VPC endpoint for snapshots: Omnistrate already provisions one
+#     on the cell VPC, so in-VPC snapshot traffic is already covered.
+# The eck-operator chart installs its CRDs by default (no installCRDs flag).
+
+resource "helm_release" "eck_operator" {
+  count = var.enable_eck ? 1 : 0
+
+  name             = "elastic-operator"
+  namespace        = "elastic-system"
+  create_namespace = true
+  repository       = "https://helm.elastic.co"
+  chart            = "eck-operator"
+  version          = var.eck_operator_chart_version
+
+  # wait=true (default) blocks until the operator StatefulSet is rolled out, so
+  # eck_ready below is only published once the operator is actually up.
+  depends_on = [
+    aws_ssm_parameter.single_cell_guard,
+    time_sleep.wait_for_eks_access,
+  ]
+}
+
+# eck_ready gate (cell -> instance): published only after the operator release
+# is deployed. The per-instance module reads this via data.aws_ssm_parameter and
+# fails-fast if a self_hosted Elasticsearch instance is created before ECK
+# exists on the cell (same cell->instance SSM "API" as vpc_id/eso_role_arn).
+resource "aws_ssm_parameter" "eck_ready" {
+  count = var.enable_eck ? 1 : 0
+
+  name  = "/pavo/cells/${var.eks_cluster_name}/eck_ready"
+  type  = "String"
+  value = "true"
+
+  depends_on = [helm_release.eck_operator]
+}
+
+# ============================================================================
 # Stakater Reloader — Helm release (cell-scoped)
 # ============================================================================
 # Rolls Deployments when watched Secrets/ConfigMaps change. Each app opts in
