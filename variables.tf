@@ -99,3 +99,27 @@ variable "central_ci_project_id" {
   type        = string
   default     = "onboarding-455713"
 }
+
+variable "enable_eck" {
+  description = <<-EOT
+    Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. Required
+    for customers running self-hosted Elasticsearch in-VPC (es_mode = self_hosted
+    in the per-instance module). Harmless but unnecessary on cells with only
+    Elastic-Cloud (es_mode = cloud) instances, so it is opt-in per cell. When
+    true, the cell publishes /pavo/cells/<eks_cluster_name>/eck_ready=true, which
+    the per-instance module reads and fails-fast on if a self_hosted instance is
+    created before ECK exists.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "eck_operator_chart_version" {
+  description = <<-EOT
+    Helm chart version for elastic/eck-operator. Operator and CRDs move in
+    lockstep with this chart. Confirm the ECK <-> Elasticsearch version support
+    matrix before bumping (ECK 3.x supports the 8.x and 9.x stacks).
+  EOT
+  type        = string
+  default     = "3.4.0"
+}
