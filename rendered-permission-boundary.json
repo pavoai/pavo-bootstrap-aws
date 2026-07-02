@@ -119,11 +119,20 @@
       }
     },
     {
+      "Sid": "EKSListClusters",
+      "Effect": "Allow",
+      "Action": [
+        "eks:ListClusters"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
       "Sid": "EKSAccessAndDescribe",
       "Effect": "Allow",
       "Action": [
         "eks:DescribeCluster",
-        "eks:ListClusters",
         "eks:CreateAccessEntry",
         "eks:DescribeAccessEntry",
         "eks:ListAccessEntries",
@@ -133,23 +142,22 @@
         "eks:AccessKubernetesApi"
       ],
       "Resource": [
-        "*"
+        "arn:aws:eks:*:*:cluster/*",
+        "arn:aws:eks:*:*:access-entry/*"
       ]
     },
     {
-      "Sid": "Bedrock",
+      "Sid": "BedrockInvokeScopedToModels",
       "Effect": "Allow",
       "Action": [
-        "bedrock:CreateFoundationModelAgreement",
-        "bedrock:GetFoundationModelAgreement",
-        "bedrock:ListFoundationModelAgreementOffers",
-        "bedrock:GetUseCaseForModelAccess",
-        "bedrock:PutUseCaseForModelAccess",
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream"
       ],
       "Resource": [
-        "*"
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-6-v1",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-6-v1"
       ]
     },
     {
