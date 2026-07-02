@@ -189,19 +189,52 @@ design — those actions don't accept resource-level permissions. Same constrain
 applies to `s3:ListAllMyBuckets`, `sns:ListTopics`, etc. (also `*` in this file).
 Read-only metadata; no data access.
 
+### Two consumers: workload boundary *and* provisioning role
+
+`policy-statements.json` is the single source of truth for **two** artifacts:
+
+1. **Workload permission boundary** (`pavo-permission-boundary-shared`) — caps the
+   Pavo app's IAM role. Rendered to `rendered-permission-boundary.json` via
+   `scripts/render-policy.sh` and attached in `main.tf`.
+2. **Terraform provisioning role** inline policy — the role Omnistrate assumes to
+   run `terraform-omnistrate-aws`. Generated into the `policies.aws` block of
+   `spec/spec-byoc.yaml` by `scripts/sync-policy-to-spec.py` (between the
+   `AUTO-GENERATED` markers). CI's `drift` job fails if that block is stale.
+
+Most statements apply to both. A few are **boundary-only** and are deliberately
+withheld from the provisioning role — listed in `BOUNDARY_ONLY_SIDS` in
+`scripts/sync-policy-to-spec.py`:
+
+- `BedrockInvokeScopedToModels` (`bedrock:InvokeModel*`, scoped to the two Claude
+  models) — runtime model invocation is the **app workload's** job. The
+  provisioning role only sets up infrastructure and must never hold model-invoke
+  rights (Coursera BYOC review finding #13). It stays in the boundary (which caps
+  the workload role that *does* invoke) but is excluded from the provisioning
+  role's policy.
+
+The provisioning role also holds **no** Bedrock agreement / use-case actions, so
+accepting the Claude model-use agreement is a one-time customer onboarding step,
+not a Pavo permission (see `terraform-omnistrate-aws` → `bedrock_model_agreements`).
+
 ### Verifying boundary edits locally
 
-After editing `policy-statements.json`, re-render the committed snapshot and
+After editing `policy-statements.json`, regenerate **both** derived artifacts and
 run the simulation matrix.
 
-**1. Re-render the snapshot** (required — CI fails if drift exists):
+**1. Re-render the boundary snapshot** (required — CI `rendered-boundary` fails on drift):
 
 ```bash
 scripts/render-policy.sh pavo-bootstrap-aws/policy-statements.json \
   | jq . > pavo-bootstrap-aws/rendered-permission-boundary.json
 ```
 
-**2. Simulate the matrix** (requires AWS creds + `boto3`):
+**2. Re-sync the provisioning-role policy in the spec** (required — CI `drift` fails on drift):
+
+```bash
+python scripts/sync-policy-to-spec.py
+```
+
+**3. Simulate the matrix** (requires AWS creds + `boto3`):
 
 ```bash
 pip install boto3
@@ -374,7 +407,7 @@ the trailing `/<session-name>` and replace
 `:sts::<acct>:assumed-role/` with `:iam::<acct>:role/`.
 
 The `variables.tf` validation rejects assumed-role ARN shapes with a clear
-error pointing back to this section.
+error message that shows how to convert a session ARN to the role ARN.
 
 ## Apply
 
