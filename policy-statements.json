@@ -247,21 +247,43 @@
     "resources": ["*"]
   },
   {
-    "sid": "EC2ReadAndSGCRUD",
+    "sid": "EC2ReadOnly",
     "effect": "Allow",
     "actions": [
       "ec2:DescribeVpcs",
       "ec2:DescribeSubnets",
       "ec2:DescribeSecurityGroups",
-      "ec2:DescribeAvailabilityZones",
-      "ec2:CreateSecurityGroup",
+      "ec2:DescribeAvailabilityZones"
+    ],
+    "resources": ["*"]
+  },
+  {
+    "sid": "EC2CreateSecurityGroupWithRequestTag",
+    "effect": "Allow",
+    "actions": ["ec2:CreateSecurityGroup"],
+    "resources": ["*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "pavo"
+      }
+    }
+  },
+  {
+    "sid": "EC2SecurityGroupMutationsTaggedPavo",
+    "effect": "Allow",
+    "actions": [
       "ec2:DeleteSecurityGroup",
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:RevokeSecurityGroupIngress",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupEgress"
     ],
-    "resources": ["*"]
+    "resources": ["*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      }
+    }
   },
   {
     "sid": "EC2TagWritesOnSecurityGroupsOnly",
