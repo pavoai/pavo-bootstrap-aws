@@ -48,7 +48,7 @@
         { "yq_path": ".applications.gcc-generator.image.tag", "ghcr_name": "tribal-gcc-generator" }
       ]
     },
-    "zitadel-provisioner": {
+    "zitadel-prov": {
       "images": [
         { "yq_path": "", "ghcr_name": "zitadel-provisioner" }
       ]
