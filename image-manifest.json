@@ -52,6 +52,11 @@
       "images": [
         { "yq_path": "", "ghcr_name": "zitadel-provisioner" }
       ]
+    },
+    "alert-sanitizer": {
+      "images": [
+        { "yq_path": "", "ghcr_name": "pavo-alert-sanitizer" }
+      ]
     }
   }
 }
