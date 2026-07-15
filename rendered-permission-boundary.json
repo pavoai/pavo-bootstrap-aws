@@ -2,11 +2,21 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "RDSReadOnly",
+      "Sid": "ReadOnlyDescribeList",
       "Effect": "Allow",
       "Action": [
         "rds:Describe*",
-        "rds:List*"
+        "rds:List*",
+        "elasticache:Describe*",
+        "elasticache:List*",
+        "elasticfilesystem:Describe*",
+        "elasticfilesystem:List*",
+        "eks:ListClusters",
+        "secretsmanager:ListSecrets",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeAvailabilityZones"
       ],
       "Resource": [
         "*"
@@ -22,17 +32,6 @@
         "arn:aws:rds:*:*:db:pavo-*",
         "arn:aws:rds:*:*:subgrp:pavo-*",
         "arn:aws:rds:*:*:snapshot:pavo-*"
-      ]
-    },
-    {
-      "Sid": "ElastiCacheReadOnly",
-      "Effect": "Allow",
-      "Action": [
-        "elasticache:Describe*",
-        "elasticache:List*"
-      ],
-      "Resource": [
-        "*"
       ]
     },
     {
@@ -78,17 +77,6 @@
       ]
     },
     {
-      "Sid": "EFSReadOnly",
-      "Effect": "Allow",
-      "Action": [
-        "elasticfilesystem:Describe*",
-        "elasticfilesystem:List*"
-      ],
-      "Resource": [
-        "*"
-      ]
-    },
-    {
       "Sid": "EFSCreateFileSystemWithRequestTag",
       "Effect": "Allow",
       "Action": [
@@ -117,16 +105,6 @@
           "aws:ResourceTag/managed_by": "pavo"
         }
       }
-    },
-    {
-      "Sid": "EKSListClusters",
-      "Effect": "Allow",
-      "Action": [
-        "eks:ListClusters"
-      ],
-      "Resource": [
-        "*"
-      ]
     },
     {
       "Sid": "EKSAccessAndDescribe",
@@ -305,29 +283,6 @@
       ],
       "Resource": [
         "arn:aws:secretsmanager:*:*:secret:rds!*"
-      ]
-    },
-    {
-      "Sid": "SecretsManagerListSecrets",
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:ListSecrets"
-      ],
-      "Resource": [
-        "*"
-      ]
-    },
-    {
-      "Sid": "EC2ReadOnly",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:DescribeVpcs",
-        "ec2:DescribeSubnets",
-        "ec2:DescribeSecurityGroups",
-        "ec2:DescribeAvailabilityZones"
-      ],
-      "Resource": [
-        "*"
       ]
     },
     {
