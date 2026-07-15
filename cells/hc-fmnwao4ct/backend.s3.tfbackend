@@ -1,0 +1,8 @@
+# Partial S3 backend config for the awstest cell (hc-fmnwao4ct).
+# Usage: terraform init -backend-config=cells/hc-fmnwao4ct/backend.s3.tfbackend
+# Requires a `terraform { backend "s3" {} }` block present at init time.
+bucket         = "pavo-tf-state-453542520145"
+key            = "pavo-bootstrap-aws/hc-fmnwao4ct/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "pavo-tf-state-locks"
+encrypt        = true
