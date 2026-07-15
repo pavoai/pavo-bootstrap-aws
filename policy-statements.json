@@ -1,8 +1,21 @@
 [
   {
-    "sid": "RDSReadOnly",
+    "sid": "ReadOnlyDescribeList",
     "effect": "Allow",
-    "actions": ["rds:Describe*", "rds:List*"],
+    "actions": [
+      "rds:Describe*",
+      "rds:List*",
+      "elasticache:Describe*",
+      "elasticache:List*",
+      "elasticfilesystem:Describe*",
+      "elasticfilesystem:List*",
+      "eks:ListClusters",
+      "secretsmanager:ListSecrets",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeAvailabilityZones"
+    ],
     "resources": ["*"]
   },
   {
@@ -14,12 +27,6 @@
       "arn:aws:rds:*:*:subgrp:pavo-*",
       "arn:aws:rds:*:*:snapshot:pavo-*"
     ]
-  },
-  {
-    "sid": "ElastiCacheReadOnly",
-    "effect": "Allow",
-    "actions": ["elasticache:Describe*", "elasticache:List*"],
-    "resources": ["*"]
   },
   {
     "sid": "ElastiCacheMutatingPavoResources",
@@ -52,12 +59,6 @@
     "resources": ["arn:aws:sqs:*:*:pavo-*"]
   },
   {
-    "sid": "EFSReadOnly",
-    "effect": "Allow",
-    "actions": ["elasticfilesystem:Describe*", "elasticfilesystem:List*"],
-    "resources": ["*"]
-  },
-  {
     "sid": "EFSCreateFileSystemWithRequestTag",
     "effect": "Allow",
     "actions": ["elasticfilesystem:CreateFileSystem"],
@@ -78,12 +79,6 @@
         "aws:ResourceTag/managed_by": "pavo"
       }
     }
-  },
-  {
-    "sid": "EKSListClusters",
-    "effect": "Allow",
-    "actions": ["eks:ListClusters"],
-    "resources": ["*"]
   },
   {
     "sid": "EKSAccessAndDescribe",
@@ -239,23 +234,6 @@
       "secretsmanager:DescribeSecret"
     ],
     "resources": ["arn:aws:secretsmanager:*:*:secret:rds!*"]
-  },
-  {
-    "sid": "SecretsManagerListSecrets",
-    "effect": "Allow",
-    "actions": ["secretsmanager:ListSecrets"],
-    "resources": ["*"]
-  },
-  {
-    "sid": "EC2ReadOnly",
-    "effect": "Allow",
-    "actions": [
-      "ec2:DescribeVpcs",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeSecurityGroups",
-      "ec2:DescribeAvailabilityZones"
-    ],
-    "resources": ["*"]
   },
   {
     "sid": "EC2CreateSecurityGroupWithRequestTag",
