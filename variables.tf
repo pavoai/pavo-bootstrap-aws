@@ -104,14 +104,16 @@ variable "enable_eck" {
   description = <<-EOT
     Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. Required
     for customers running self-hosted Elasticsearch in-VPC (hosting_mode = self_hosted
-    in the per-instance module). Harmless but unnecessary on cells with only
-    Elastic-Cloud (hosting_mode = cloud) instances, so it is opt-in per cell. When
+    in the per-instance module). Unnecessary on cells with only Elastic-Cloud
+    (hosting_mode = cloud) instances — an idle operator, CRDs, and validating
+    webhook add avoidable surface — so it is opt-in per cell and DEFAULTS OFF.
+    Set true on any cell that will host a self_hosted-Elasticsearch instance. When
     true, the cell publishes /pavo/cells/<eks_cluster_name>/eck_ready=true, which
     the per-instance module reads and fails-fast on if a self_hosted instance is
     created before ECK exists.
   EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "eck_operator_chart_version" {
