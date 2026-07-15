@@ -355,8 +355,9 @@ resource "helm_release" "external_secrets" {
 # Elastic Cloud on Kubernetes (ECK) operator — Helm release (cell-scoped)
 # ============================================================================
 # Cluster-global CRDs + operator for self-hosted Elasticsearch (per-instance
-# hosting_mode = self_hosted). Opt-in per cell via var.enable_eck — harmless but
-# unnecessary on cells with only Elastic-Cloud instances.
+# hosting_mode = self_hosted). Opt-in per cell via var.enable_eck (default false)
+# — unnecessary on cells with only Elastic-Cloud instances, where an idle
+# operator + CRDs + validating webhook would add avoidable surface.
 #
 # Deliberately NOT here (validated live on hc-fmnwao4ct):
 #   - vm.max_map_count sysctl (ES >= 8.16 prereq): the Omnistrate node AMI is
