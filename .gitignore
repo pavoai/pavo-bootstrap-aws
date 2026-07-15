@@ -4,6 +4,13 @@
 *.tfvars
 backend.tf
 
+# Exception: per-cell input files under cells/** are committed — they hold only
+# non-secret infra identifiers (VPC/subnet/OIDC/cluster + an Omnistrate role ARN)
+# and drive the dev bootstrap apply / "Release Omnistrate Bootstrap Dev" Action.
+# Allow-list each file EXPLICITLY (not a broad glob) so a future secret-bearing
+# tfvars under cells/ can never be un-ignored by accident.
+!cells/hc-fmnwao4ct/hc-fmnwao4ct.tfvars
+
 # NOTE: .terraform.lock.hcl IS committed for this root module. pavo-bootstrap-aws
 # is a customer-applied root module distributed as a release artefact via the
 # sync-bootstrap-mirror workflow. Committing the lock file ensures every customer
