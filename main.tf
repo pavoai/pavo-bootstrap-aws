@@ -178,63 +178,6 @@ resource "aws_ssm_parameter" "permission_boundary_arn" {
 }
 
 # ============================================================================
-# EBS CSI driver permission boundary — separate from the workload boundary.
-# Mirrors AmazonEBSCSIDriverPolicy. Permission boundaries are intersection
-# caps, so attaching the workload boundary to the EBS CSI role would silently
-# block ec2:CreateVolume / Attach / Detach / Delete / snapshot operations.
-# ============================================================================
-locals {
-  ebs_csi_policy_statements = jsondecode(file("${path.module}/ebs-csi-policy-statements.json"))
-}
-
-data "aws_iam_policy_document" "pavo_ebs_csi_permission_boundary" {
-  dynamic "statement" {
-    for_each = local.ebs_csi_policy_statements
-    content {
-      sid       = statement.value.sid
-      effect    = statement.value.effect
-      actions   = statement.value.actions
-      resources = statement.value.resources
-
-      dynamic "condition" {
-        for_each = flatten([
-          for test_name, vars in lookup(statement.value, "conditions", {}) :
-          [for var_name, vals in vars : {
-            test     = test_name
-            variable = var_name
-            values   = tolist(flatten([vals]))
-          }]
-        ])
-        content {
-          test     = condition.value.test
-          variable = condition.value.variable
-          values   = condition.value.values
-        }
-      }
-    }
-  }
-}
-
-resource "aws_iam_policy" "pavo_ebs_csi_permission_boundary" {
-  # Naming matches the IAMCreateRolesOnlyWithBoundary ArnLike pattern
-  # (arn:aws:iam::*:policy/pavo-permission-boundary-*) so the boundary-
-  # enforcement condition still allows roles created with this boundary.
-  name        = "pavo-permission-boundary-ebs-csi-shared"
-  description = "Permission boundary for the Pavo EBS CSI driver IRSA role. Source: ebs-csi-policy-statements.json (mirrors AmazonEBSCSIDriverPolicy v14)."
-  policy      = data.aws_iam_policy_document.pavo_ebs_csi_permission_boundary.json
-
-  depends_on = [aws_ssm_parameter.single_cell_guard]
-}
-
-resource "aws_ssm_parameter" "ebs_csi_permission_boundary_arn" {
-  name  = "/pavo/shared/ebs_csi_permission_boundary_arn"
-  type  = "String"
-  value = aws_iam_policy.pavo_ebs_csi_permission_boundary.arn
-
-  depends_on = [aws_ssm_parameter.single_cell_guard]
-}
-
-# ============================================================================
 # Single-cell-per-account sentinel
 # ============================================================================
 # The existing bootstrap module mixes account-scoped resources (workload + EBS
@@ -424,125 +367,20 @@ resource "helm_release" "stakater_reloader" {
 }
 
 # ============================================================================
-# EBS CSI driver — IRSA wiring (cell-scoped, fixes P0.2 lifecycle bug)
+# EBS CSI driver — NOT managed here (Omnistrate owns it, including customer CMK)
 # ============================================================================
-# Pre-rescope this lived in `terraform-omnistrate-aws/` as a per-instance role
-# bound to the cluster-wide `kube-system/ebs-csi-controller-sa` ServiceAccount.
-# Deleting one instance could remove or flip the IRSA annotation for the whole
-# cell, breaking PVC provisioning for every other instance on the cluster.
+# Omnistrate pre-installs and lifecycle-manages the EBS CSI driver on every cell
+# — the omnistrate-ebs-csi-driver-<cell> IRSA role, its
+# kube-system/ebs-csi-controller-sa ServiceAccount, and the lease RBAC. That
+# role is already bounded (omnistrate-bootstrap-permissions-boundary) AND now
+# carries the customer-CMK KMS permissions (kms:CreateGrant + crypto, scoped by
+# kms:ViaService=ec2 and aws:ResourceTag/omnistrate.com/customer-managed-kms —
+# Omnistrate's Option 1A; see the CMK onboarding section in README.md).
 #
-# Post-rescope: one role per cell, name keyed by cluster (with a deterministic
-# hash suffix for IAM-role-name length safety — 64-char limit). Cell teardown
-# decommissions it; instance teardown never touches it.
-
-locals {
-  # Cell-hash suffix preserves uniqueness even when the cluster-name prefix
-  # gets truncated to fit IAM's 64-char role-name limit. Truncate the prefix
-  # (not the hash) so collisions remain impossible:  55 + "-" + 8 = 64.
-  ebs_csi_cell_hash = substr(sha1("${var.aws_region}:${var.eks_cluster_name}"), 0, 8)
-  ebs_csi_name_base = substr("pavo-ebs-csi-${var.eks_cluster_name}", 0, 55)
-  ebs_csi_role_name = "${local.ebs_csi_name_base}-${local.ebs_csi_cell_hash}"
-}
-
-data "aws_iam_policy_document" "ebs_csi_assume_role" {
-  statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-    effect  = "Allow"
-
-    principals {
-      type        = "Federated"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "${var.eks_oidc_provider}:sub"
-      values   = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "${var.eks_oidc_provider}:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-  }
-}
-
-# STANDBY role. It is no longer wired to the EBS-CSI ServiceAccount (the IRSA
-# force-patch below was removed once Omnistrate took ownership of the driver
-# role + customer-CMK KMS — Option 1A). Retained (not deleted) because its
-# permission boundary is still exported via SSM + validated by
-# scripts/check-iam-boundary.py, and the ebs-csi-leases Role/Bindings remain in
-# use. Full GC of this role + boundary + lease RBAC is tracked as a follow-up.
-resource "aws_iam_role" "ebs_csi" {
-  name                 = local.ebs_csi_role_name
-  assume_role_policy   = data.aws_iam_policy_document.ebs_csi_assume_role.json
-  permissions_boundary = aws_iam_policy.pavo_ebs_csi_permission_boundary.arn
-
-  depends_on = [aws_ssm_parameter.single_cell_guard]
-}
-
-resource "aws_iam_role_policy_attachment" "ebs_csi" {
-  role       = aws_iam_role.ebs_csi.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-
-  depends_on = [aws_ssm_parameter.single_cell_guard]
-}
-
-# NOTE: the IRSA annotation force-patch on ebs-csi-controller-sa was REMOVED.
-# Omnistrate now owns customer-CMK EBS end to end (their preferred Option 1A):
-# the managed omnistrate-ebs-csi-driver-<cell> role carries the CMK KMS
-# permissions (kms:CreateGrant + crypto, scoped by kms:ViaService=ec2 and the
-# aws:ResourceTag/omnistrate.com/customer-managed-kms tag), delivered via the
-# account-config CloudFormation permissions boundary. Re-annotating the SA back
-# to pavo-ebs-csi (which has NO KMS) would REGRESS CMK provisioning, so we let
-# the SA ride Omnistrate's role. Validated live on awstest (hc-fmnwao4ct): a
-# gp3 PVC with kmsKeyId=<customer CMK> binds and the EBS volume is Encrypted
-# under the customer key via the Omnistrate driver role — no Pavo grant.
-# See the CMK onboarding section in README.md.
-
-# ============================================================================
-# ebs-csi-leases — Role + RoleBinding (cell-scoped, kube-system)
-# ============================================================================
-
-resource "kubernetes_role" "ebs_csi_leases" {
-  metadata {
-    name      = "ebs-csi-leases-role"
-    namespace = "kube-system"
-  }
-  rule {
-    api_groups = ["coordination.k8s.io"]
-    resources  = ["leases"]
-    verbs      = ["get", "watch", "list", "create", "update", "patch"]
-  }
-
-  depends_on = [
-    aws_ssm_parameter.single_cell_guard,
-    time_sleep.wait_for_eks_access,
-  ]
-}
-
-resource "kubernetes_role_binding" "ebs_csi_leases" {
-  metadata {
-    name      = "ebs-csi-leases-binding"
-    namespace = "kube-system"
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.ebs_csi_leases.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = "ebs-csi-controller-sa"
-    namespace = "kube-system"
-  }
-
-  depends_on = [
-    aws_ssm_parameter.single_cell_guard,
-    kubernetes_role.ebs_csi_leases,
-  ]
-}
+# So this module manages NONE of the driver's role/SA/RBAC. Re-owning it caused
+# a reconcile tug-of-war, and re-annotating the SA to a Pavo role (which has NO
+# KMS) would REGRESS customer-CMK provisioning. We only add the StorageClass
+# below, on top of Omnistrate's ebs.csi.aws.com provisioner.
 
 # ============================================================================
 # pd-balanced StorageClass (cell-scoped, cluster-wide)

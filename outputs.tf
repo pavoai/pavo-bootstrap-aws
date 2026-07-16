@@ -8,11 +8,6 @@ output "permission_boundary_arn" {
   value       = aws_iam_policy.pavo_permission_boundary.arn
 }
 
-output "ebs_csi_permission_boundary_arn" {
-  description = "ARN of the EBS CSI driver permission boundary (attached to pavo-ebs-csi-*)."
-  value       = aws_iam_policy.pavo_ebs_csi_permission_boundary.arn
-}
-
 output "ssm_shared_prefix" {
   description = "SSM Parameter Store prefix for account-scoped bootstrap state (permission boundaries)."
   value       = "/pavo/shared"
