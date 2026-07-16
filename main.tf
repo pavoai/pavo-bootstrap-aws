@@ -569,6 +569,12 @@ resource "kubectl_manifest" "pavo_image_policy" {
       authorities = [
         {
           name = "pavo-cloud-build-${each.key}"
+          # Read cosign signatures/attestations from the PRIVATE ghcr.io/pavoai
+          # repo. signaturePullSecrets resolve from the admitted workload's
+          # namespace; pavoInfra materializes `pavo-ghcr-signature-pull` there.
+          source = [
+            { signaturePullSecrets = [{ name = "pavo-ghcr-signature-pull" }] }
+          ]
           keyless = {
             url = "https://fulcio.sigstore.dev"
             identities = [
@@ -594,6 +600,9 @@ resource "kubectl_manifest" "pavo_image_policy" {
         },
         {
           name = "pavo-cloud-build-shared-transition"
+          source = [
+            { signaturePullSecrets = [{ name = "pavo-ghcr-signature-pull" }] }
+          ]
           keyless = {
             url = "https://fulcio.sigstore.dev"
             identities = [
