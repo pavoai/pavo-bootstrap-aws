@@ -42,17 +42,23 @@ publishes a `vMAJOR.MINOR.PATCH` snapshot to the mirror; pushes to the source
 
 The resources this module creates fall into two scopes:
 
-- **Account-scoped** — the two IAM permission boundaries and the single-cell
+- **Account-scoped** — the IAM workload permission boundary and the single-cell
   sentinel SSM parameter. They reference no cell/instance resources, so they are
   shared across the whole AWS account.
-- **Cell-scoped** — the ESO IRSA role + ESO Helm release, the EBS CSI driver IRSA
-  wiring (IAM role + SA annotation + RBAC), the Reloader Helm release, the
-  `pd-balanced` StorageClass, the `pavo-nginx` IngressClass, the Let's Encrypt
-  ClusterIssuer, the EKS access entry for the Omnistrate runner, and the cell's
-  network metadata.
+- **Cell-scoped** — the ESO IRSA role + ESO Helm release, the Reloader Helm
+  release, the `pd-balanced` StorageClass, the `pavo-nginx` IngressClass, the
+  Let's Encrypt ClusterIssuer, the EKS access entry for the Omnistrate runner,
+  and the cell's network metadata.
+
+> **The EBS CSI driver is owned by Omnistrate, not this module.** Omnistrate
+> pre-installs and lifecycle-manages the driver on every cell (IRSA role, its
+> `kube-system/ebs-csi-controller-sa` ServiceAccount, and RBAC), and its role
+> already carries the `omnistrate-bootstrap-permissions-boundary`. This module
+> only adds the `pd-balanced` StorageClass on top of that driver — it does not
+> re-own the driver's role/SA/RBAC (doing so caused a reconcile tug-of-war).
 
 **Short-term design:** a single bootstrap module, run **once per cell**. It
-creates the account-shared permission boundaries (stable `-shared` names) and
+creates the account-shared permission boundary (stable `-shared` name) and
 the full cell-scoped K8s/Helm/IAM stack (keyed on the cluster name) together in
 one apply. **This assumes one deployment cell per AWS account.**
 
@@ -74,26 +80,17 @@ supports multi-cell-per-account.
 
 ### IAM (account + cell scope)
 
-- **2 IAM roles** (cell-scoped):
+- **1 IAM role** (cell-scoped):
   - `pavo-eso-${eks_cluster_name}` — IRSA role assumed by the External Secrets
     Operator running in your EKS cluster, used to read the RDS-managed master
     password secret from your AWS Secrets Manager and decrypt it via your CMK.
-  - `pavo-ebs-csi-<cluster-prefix>-<cell-hash>` — IRSA role for the
-    `kube-system/ebs-csi-controller-sa` ServiceAccount. The cell-hash suffix
-    keeps the name unique even when `<eks_cluster_name>` gets truncated to fit
-    IAM's 64-char role-name limit (prefix-55 + dash + hash-8 = 64).
 - **1 inline role policy**: `pavo-eso-policy-${eks_cluster_name}` — grants ESO
   `secretsmanager:GetSecretValue` / `DescribeSecret` on `rds!*` and `pavo-*`
   secrets, plus `kms:Decrypt` / `DescribeKey` scoped via
   `kms:ViaService = secretsmanager.<region>.amazonaws.com`.
-- **1 attached managed policy**: `AmazonEBSCSIDriverPolicy` attached to the
-  EBS CSI role above.
-- **2 IAM policies (permission boundaries, account-scoped)**:
+- **1 IAM policy (permission boundary, account-scoped)**:
   - `pavo-permission-boundary-shared` — workload boundary attached to Pavo's
     app IAM role (`pavo-role-*`). Source of truth: `policy-statements.json`.
-  - `pavo-permission-boundary-ebs-csi-shared` — separate boundary for the EBS
-    CSI driver IRSA role. Mirrors `AmazonEBSCSIDriverPolicy`. Source:
-    `ebs-csi-policy-statements.json`.
 
 ## Customer-managed-key (CMK) EBS volumes (`gp3-cmk`)
 
@@ -161,12 +158,9 @@ customer keys.)
 
 ### Kubernetes (cell scope)
 
-- `kubernetes_annotations.ebs_csi_sa` — patches the `eks.amazonaws.com/role-arn`
-  annotation on `kube-system/ebs-csi-controller-sa`.
-- `kubernetes_role.ebs_csi_leases` + RoleBinding in `kube-system` — RBAC the
-  EBS CSI controller needs for leader election.
 - `kubernetes_storage_class_v1.ebs_gp3` — `pd-balanced` cluster-scoped
-  StorageClass (gp3, name matches GCP convention used by connector PVCs).
+  StorageClass (gp3, name matches GCP convention used by connector PVCs). Uses
+  Omnistrate's pre-installed `ebs.csi.aws.com` provisioner.
 - `kubectl_manifest.pavo_ingress_class` — cluster-scoped `pavo-nginx`
   IngressClass.
 - `kubectl_manifest.pavo_letsencrypt_prod` — cluster-scoped Let's Encrypt
@@ -205,9 +199,9 @@ enforce-mode apply.
 
 - **5 cell-scoped** under `/pavo/cells/${eks_cluster_name}/`: `vpc_id`,
   `private_subnet_ids`, `eks_cluster_name`, `eks_oidc_provider`, `eso_role_arn`.
-- **3 account-scoped** under `/pavo/shared/`: `permission_boundary_arn`,
-  `ebs_csi_permission_boundary_arn`, `bootstrap_cell` (the single-cell sentinel
-  described under *Resource scopes*; `prevent_destroy = true`).
+- **2 account-scoped** under `/pavo/shared/`: `permission_boundary_arn`,
+  `bootstrap_cell` (the single-cell sentinel described under *Resource scopes*;
+  `prevent_destroy = true`).
 
 ## Permission boundary scoping & verification
 
@@ -642,7 +636,7 @@ This is a multi-step manual procedure; coordinate with Pavo support.
 ## Scoping notes
 
 This module's resources are **account-scoped** (the permission boundaries + the
-single-cell sentinel) and **cell-scoped** (the ESO + EBS CSI IRSA roles, the
+single-cell sentinel) and **cell-scoped** (the ESO IRSA role, the
 Helm releases, the cluster-scoped K8s resources, the EKS access entry, and the
 cell's network metadata) — see *Resource scopes* above.
 
@@ -664,7 +658,7 @@ possible one.
 
 1. *account bootstrap* — the two shared permission boundaries + `/pavo/shared/*`
    SSM parameters + the sentinel; applied **once per AWS account**.
-2. *cell bootstrap* — the ESO + EBS CSI IRSA roles, Helm releases, EKS access
+2. *cell bootstrap* — the ESO IRSA role, Helm releases, EKS access
    entry, cluster-scoped K8s resources, and `/pavo/cells/<eks_cluster_name>/*`
    SSM parameters; applied **once per deployment cell**.
 
@@ -676,7 +670,7 @@ module owns the resource, who applies it, and where state lives.
 | Scope | Module | Applier | State backend | Examples |
 |---|---|---|---|---|
 | **Account** | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IAM permission boundaries, `/pavo/shared/*` SSM |
-| **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EBS CSI role, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
+| **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
 | **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | GCS `gs://pavo-terraform-state`, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
 | **Instance** (one Pavo deployment) | `terraform-omnistrate-aws/` | Omnistrate runner | Omnistrate-managed | RDS, ElastiCache, S3, SNS/SQS, EFS, workload IAM role, app namespace, app secrets, Elastic Cloud deployment |
 
