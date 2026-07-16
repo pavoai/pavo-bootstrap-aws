@@ -468,6 +468,12 @@ data "aws_iam_policy_document" "ebs_csi_assume_role" {
   }
 }
 
+# STANDBY role. It is no longer wired to the EBS-CSI ServiceAccount (the IRSA
+# force-patch below was removed once Omnistrate took ownership of the driver
+# role + customer-CMK KMS — Option 1A). Retained (not deleted) because its
+# permission boundary is still exported via SSM + validated by
+# scripts/check-iam-boundary.py, and the ebs-csi-leases Role/Bindings remain in
+# use. Full GC of this role + boundary + lease RBAC is tracked as a follow-up.
 resource "aws_iam_role" "ebs_csi" {
   name                 = local.ebs_csi_role_name
   assume_role_policy   = data.aws_iam_policy_document.ebs_csi_assume_role.json
@@ -483,32 +489,17 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
   depends_on = [aws_ssm_parameter.single_cell_guard]
 }
 
-# Patch IRSA annotation onto the pre-existing kube-system ServiceAccount
-# (Omnistrate's Helm provisioner creates it; this just wires AWS perms onto
-# it without touching the pods).
-resource "kubernetes_annotations" "ebs_csi_sa" {
-  api_version = "v1"
-  kind        = "ServiceAccount"
-  # Omnistrate's Helm provisioner claims ownership of annotations on this SA
-  # during cluster bootstrap. force=true lets Terraform override and keep the
-  # IRSA role-arn annotation in sync across re-applies. With cell-scoped
-  # ownership (this module being the sole writer), there's now a single owner
-  # — no last-writer-wins race across multiple instance states.
-  force = true
-  metadata {
-    name      = "ebs-csi-controller-sa"
-    namespace = "kube-system"
-  }
-  annotations = {
-    "eks.amazonaws.com/role-arn" = aws_iam_role.ebs_csi.arn
-  }
-
-  depends_on = [
-    aws_ssm_parameter.single_cell_guard,
-    aws_iam_role_policy_attachment.ebs_csi,
-    time_sleep.wait_for_eks_access,
-  ]
-}
+# NOTE: the IRSA annotation force-patch on ebs-csi-controller-sa was REMOVED.
+# Omnistrate now owns customer-CMK EBS end to end (their preferred Option 1A):
+# the managed omnistrate-ebs-csi-driver-<cell> role carries the CMK KMS
+# permissions (kms:CreateGrant + crypto, scoped by kms:ViaService=ec2 and the
+# aws:ResourceTag/omnistrate.com/customer-managed-kms tag), delivered via the
+# account-config CloudFormation permissions boundary. Re-annotating the SA back
+# to pavo-ebs-csi (which has NO KMS) would REGRESS CMK provisioning, so we let
+# the SA ride Omnistrate's role. Validated live on awstest (hc-fmnwao4ct): a
+# gp3 PVC with kmsKeyId=<customer CMK> binds and the EBS volume is Encrypted
+# under the customer key via the Omnistrate driver role — no Pavo grant.
+# See the CMK onboarding section in README.md.
 
 # ============================================================================
 # ebs-csi-leases — Role + RoleBinding (cell-scoped, kube-system)
@@ -577,7 +568,6 @@ resource "kubernetes_storage_class_v1" "ebs_gp3" {
 
   depends_on = [
     aws_ssm_parameter.single_cell_guard,
-    kubernetes_annotations.ebs_csi_sa,
     time_sleep.wait_for_eks_access,
   ]
 }
