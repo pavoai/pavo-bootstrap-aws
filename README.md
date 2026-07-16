@@ -95,6 +95,52 @@ supports multi-cell-per-account.
     CSI driver IRSA role. Mirrors `AmazonEBSCSIDriverPolicy`. Source:
     `ebs-csi-policy-statements.json`.
 
+## Customer-managed-key (CMK) EBS volumes (`gp3-cmk`)
+
+For data residency / key custody, EBS volumes (self-hosted Elasticsearch data,
+the in-VPC observability PVCs) can be encrypted with **your own KMS key** via a
+`gp3-cmk` StorageClass (a `gp3` StorageClass with `kmsKeyId` set). Default
+`aws/ebs`-key volumes work with no extra setup; **customer-CMK volumes need three
+things** because the EBS CSI driver's role must be allowed to use your key:
+
+1. **Tag the key** — add this tag to the CMK you want used for EBS:
+   ```
+   omnistrate.com/customer-managed-kms = true
+   ```
+   The managed EBS-CSI role's KMS permissions are scoped to keys carrying this
+   tag (so the driver can only use keys you've explicitly opted in).
+2. **Re-run the Omnistrate account-config CloudFormation** so the managed
+   EBS-CSI driver role picks up the KMS actions (`kms:CreateGrant` + the crypto
+   set, scoped via `kms:ViaService = ec2.<region>.amazonaws.com` and the
+   `omnistrate.com/customer-managed-kms` tag). In the Omnistrate portal:
+   **Operations Center → BYOC Cloud Accounts → your account → open the provided
+   CloudFormation link**, then **Update** the existing `AccountConfigSetup`
+   stack (Replace template → the `…/onboarding-cfv1/account-config-setup-template-scoped-permissions.yaml`
+   URL → keep existing parameters → acknowledge IAM capabilities). After
+   `UPDATE_COMPLETE`, Omnistrate reconciles the KMS permissions onto the driver
+   role. `CreateGrant` is the action the driver needs to hand the grant to EBS
+   at attach time.
+3. **Only for locked-down keys** — if your key policy does **not** delegate to the
+   account root, add a key-policy statement naming the **Omnistrate-managed
+   EBS-CSI driver role** with the same KMS actions. If the key policy delegates
+   to root (the default), the IAM side alone is enough and no key-policy edit is
+   needed. The driver runs as the Omnistrate-owned role (not a Pavo role) — get
+   its exact ARN from the cell:
+   ```
+   kubectl -n kube-system get sa ebs-csi-controller-sa \
+     -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}'
+   # -> arn:aws:iam::<acct>:role/omnistrate-ebs-csi-driver-<cell>-<hash>
+   ```
+
+> `kms:ViaService = ec2.<region>.amazonaws.com` scopes the role to using the key
+> only through EC2/EBS, never the KMS API directly; **your key policy stays the
+> per-key gate.**
+
+Then reference the CMK-backed `gp3-cmk` StorageClass in your PVCs. (On a cell
+whose key already delegates to account root — e.g. our `awstest` — the IAM side
+alone provisions CMK volumes; the tag + key policy matter for locked-down
+customer keys.)
+
 ### EKS (cell scope)
 
 - **1 EKS access entry** (`aws_eks_access_entry.runner`) + cluster-admin policy
