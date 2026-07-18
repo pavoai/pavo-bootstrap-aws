@@ -298,7 +298,7 @@ resource "helm_release" "external_secrets" {
 # Elastic Cloud on Kubernetes (ECK) operator — Helm release (cell-scoped)
 # ============================================================================
 # Cluster-global CRDs + operator for self-hosted Elasticsearch (per-instance
-# hosting_mode = self_hosted). Opt-in per cell via var.enable_eck (default false)
+# es_mode = self_hosted). Opt-in per cell via var.enable_eck (default false)
 # — unnecessary on cells with only Elastic-Cloud instances, where an idle
 # operator + CRDs + validating webhook would add avoidable surface.
 #
