@@ -417,7 +417,7 @@ export AWS_REGION=us-east-1           # your region
 | `image_policy_mode` | Sigstore ClusterImagePolicy enforcement mode for `ghcr.io/pavoai/**` images. `"enforce"` (default) rejects admission of images that fail verification; `"warn"` admits them and emits a Warning to admission callers (reserved for one-off signing-bake-in on a fresh image lineup). |
 | `policy_controller_chart_version` | Helm chart version for `sigstore/policy-controller`. Default `0.10.6`. Bump deliberately and validate by setting `image_policy_mode = "warn"` for the upgrade apply — chart upgrades can change webhook config paths or CRD API versions. |
 | `central_ci_project_id` | GCP project hosting Pavo's central Cloud Build that builds + signs all `ghcr.io/pavoai/*` images. Default `onboarding-455713`. The per-service signing SAs live here as `cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com`. Override only if you've forked the signing pipeline into a different GCP project. |
-| `enable_eck` | Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. **Default `false`.** Set `true` **only** on a cell that will host a self-hosted in-VPC Elasticsearch instance (`hosting_mode = self_hosted`). Cloud-Elasticsearch-only cells should leave it off to avoid an idle operator, CRDs, and validating webhook. When `true`, the cell publishes `/pavo/cells/<eks_cluster_name>/eck_ready=true`; the per-instance module reads that and **fails fast** if a `self_hosted` instance is created before ECK exists. |
+| `enable_eck` | Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. **Default `false`.** Set `true` **only** on a cell that will host a self-hosted in-VPC Elasticsearch instance (`es_mode = self_hosted`). Cloud-Elasticsearch-only cells should leave it off to avoid an idle operator, CRDs, and validating webhook. When `true`, the cell publishes `/pavo/cells/<eks_cluster_name>/eck_ready=true`; the per-instance module reads that and **fails fast** if a `self_hosted` instance is created before ECK exists. |
 | `eck_operator_chart_version` | Helm chart version for `elastic/eck-operator` (operator + CRDs move in lockstep). Default `3.4.0`. Only relevant when `enable_eck = true`. Confirm the ECK ↔ Elasticsearch support matrix before bumping (ECK 3.x supports the 8.x and 9.x stacks). |
 
 Populate the first 5 from the Omnistrate console (instance details panel) or
@@ -431,7 +431,7 @@ off by default)**.
 > **⚠️ Upgrade note — `enable_eck` default changed `true` → `false`.** Earlier
 > versions of this module installed the ECK operator on **every** cell by
 > default. If you already run a **self-hosted in-VPC Elasticsearch** instance
-> (`hosting_mode = self_hosted`) on this cell, you **must** set
+> (`es_mode = self_hosted`) on this cell, you **must** set
 > `enable_eck = true` **before** applying this version — otherwise the apply
 > removes the ECK operator and deletes `/pavo/cells/<cluster>/eck_ready`, and
 > the per-instance module's `eck_ready` guard will then fail any self-hosted-ES
