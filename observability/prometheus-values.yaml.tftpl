@@ -137,6 +137,56 @@ serverFiles:
           - source_labels: [__meta_kubernetes_service_name]
             action: keep
             regex: pavo-observability-prometheus-prometheus-node-exporter
+      # Infra: cAdvisor (per-container CPU/mem/network/fs) via each node's kubelet.
+      # Direct-kubelet scrape (https :10250 /metrics/cadvisor) — authorized by the
+      # nodes/metrics RBAC the prometheus ClusterRole already grants (we do NOT have
+      # nodes/proxy, so the apiserver-proxy variant is not used). This is what makes
+      # the per-service resource dashboards universal (every pod, not just the ones
+      # that expose a prometheus_client /metrics).
+      - job_name: kubernetes-cadvisor
+        scheme: https
+        # Verify the kubelet's serving cert against the cluster CA — EKS signs it
+        # and includes the node InternalIP in the SANs (confirmed on hc-fmnwao4ct),
+        # so the bearer token is never sent to an unverified/impersonated endpoint.
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+          - target_label: __metrics_path__
+            replacement: /metrics/cadvisor
+      # Platform: Zitadel (self-hosted IdP). Serves OpenTelemetry Prometheus metrics
+      # at https :8080 /debug/metrics (self-signed TLS, no auth). Service-name-based
+      # like the ES exporter; on a cloud-Zitadel cell no Service matches and the job
+      # is simply empty. Gives HTTP/gRPC RED + event-projection (CQRS) health.
+      - job_name: zitadel
+        scheme: https
+        metrics_path: /debug/metrics
+        # Zitadel serves a cert-manager self-signed cert (issuer zitadel-selfsigned)
+        # minted per-instance; this cell-scoped Prometheus has no stable reference to
+        # that instance CA, so it can't chain-verify. Accepted because the scrape
+        # sends NO credentials (unauthenticated /debug/metrics) — the only exposure
+        # is spoofed in-cluster metric data, not token theft. Revisit if Zitadel is
+        # ever fronted by a cluster-trusted CA.
+        tls_config:
+          insecure_skip_verify: true
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: zitadel
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
       # App metrics (near-term). Every Pavo app service exposes a prometheus_client
       # /metrics endpoint; the SDK OTLP push path is not yet universal (only some
       # services emit it), so scrape /metrics from any pod that opts in via the
