@@ -334,18 +334,30 @@ resource "helm_release" "observability_otel_collector" {
 # Multi-doc files are split with kubectl_file_documents; single-doc files apply
 # their yaml_body directly.
 
-# ES dashboard ConfigMap — the Grafana sidecar loads it by the grafana_dashboard
-# label. App RED + infra dashboards land here too, authored against real series
-# after the first self_hosted deploy (see README "Dashboards").
-resource "kubectl_manifest" "obs_es_dashboard" {
-  count = local.obs_count
+# Dashboard ConfigMaps — the Grafana sidecar loads each by the grafana_dashboard
+# label. All authored as-code against the real series each source exposes:
+#   - Infrastructure       node-exporter + KSM + Elasticsearch + Zitadel + observability (rows)
+#   - Service resources    container_* (cAdvisor) + KSM, cross-service
+#   - Intern               pavo_* agent telemetry + resources
+#   - Onboarding-copy      onboarding_* + resources
+#   - Tribal-knowledge     resources + sub-service breakdown
+# Elasticsearch is a full row in Infrastructure (no separate ES dashboard).
+# Adding a dashboard = drop a <name>-configmap.yaml in manifests/ and list it here.
+resource "kubectl_manifest" "obs_dashboards" {
+  for_each = local.obs_count > 0 ? toset([
+    "dashboard-infra-configmap.yaml",
+    "dashboard-service-resources-configmap.yaml",
+    "dashboard-intern-configmap.yaml",
+    "dashboard-onboarding-configmap.yaml",
+    "dashboard-tribal-configmap.yaml",
+  ]) : toset([])
 
   server_side_apply = true
   force_conflicts   = true
   field_manager     = "terraform"
   apply_only        = true
 
-  yaml_body  = file("${path.module}/observability/manifests/dashboard-configmap.yaml")
+  yaml_body  = file("${path.module}/observability/manifests/${each.value}")
   depends_on = [kubernetes_namespace_v1.observability]
 }
 
