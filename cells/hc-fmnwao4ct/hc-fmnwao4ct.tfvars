@@ -15,10 +15,19 @@ eks_oidc_provider  = "oidc.eks.us-east-1.amazonaws.com/id/16BBB24DBDE3D17FEE6EA9
 # The Omnistrate Terraform runner role (applies pavoInfra); needs cluster-admin.
 runner_role_arn = "arn:aws:iam::453542520145:role/omnistrate-custom-terraform-role-for-sm-YO9bljX5OX"
 
-# Sigstore enforcement: currently "warn" while we confirm every running
-# ghcr.io/pavoai image on this cell verifies. Flip to "enforce" once the warn
-# window is clean (see README → "Enforcement rollout").
-image_policy_mode = "warn"
+# Sigstore enforcement: "enforce" — the warn window is clean (every running
+# ghcr.io/pavoai image on this cell verifies) and the cell was flipped live.
+# This codifies that so awstest mirrors the prod Coursera/BCBS posture.
+image_policy_mode = "enforce"
 
 # awstest mirrors a full customer cell that will host self-hosted in-VPC ES.
 enable_eck = true
+
+# In-VPC observability (self-hosted Grafana/Prometheus/OTel) — mirrors a
+# grafana_mode=self_hosted customer cell (zero-egress telemetry). Grafana is
+# served at grafana.<observability_grafana_host> over the internal pavo-nginx
+# ingress. cell_kms_key_arn is the cell's single CMK (also used by RDS/ES);
+# the observability PVCs bind it via the gp3-cmk StorageClass.
+enable_observability       = true
+observability_grafana_host = "awstest.pavoai.dev"
+cell_kms_key_arn           = "arn:aws:kms:us-east-1:453542520145:key/81389baa-ae65-44eb-8dea-426a06be52d9"
