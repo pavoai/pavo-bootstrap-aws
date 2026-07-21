@@ -681,9 +681,24 @@ module owns the resource, who applies it, and where state lives.
 3. If it lives in Pavo's identity tenant (Zitadel) → `pavo-customer-bootstrap/`.
 4. If it's cluster-scoped K8s or per-cell IAM → `pavo-bootstrap-aws/`.
 5. Otherwise (per-instance app resource) → `terraform-omnistrate-aws/`.
+6. If it's a self-hostable cell substrate the customer opts into (ECK, in-VPC observability) → `pavo-bootstrap-aws/` behind an `enable_*` flag — NEVER an Omnistrate cell-amenity. See `pavo-bootstrap-aws/README.md` → *Cell self-hosting flags*.
 
 ### Hard rules
 
 - No cluster-scoped K8s resource may live in `terraform-omnistrate-aws/`, even with `apply_only = true` as a mitigation.
 - `pavo-customer-bootstrap/` MUST NOT declare `instance_id` as a variable (structural enforcement of the customer-hostname invariant).
 - A second cell in the same AWS account is currently guarded by an SSM sentinel — see `pavo-bootstrap-aws/README.md`.
+- No fifth "place": Omnistrate cell-amenities are not a home for Pavo infra. Cell-scoped infra a customer should apply/audit in their VPC → `pavo-bootstrap-aws/` (customer-applied), never an amenity (Pavo-applied, no audit trail). The observability stack shipped as an amenity by mistake — migrating to `enable_observability` in bootstrap.
+
+## Cell self-hosting flags (`enable_eck`, `enable_observability`)
+
+Each in-VPC substrate a strict/residency customer opts into is gated by an opt-in, **default-`false`** flag:
+
+| Flag | Installs (cell-scoped) | Instance routing flag | Cell→instance gate |
+|---|---|---|---|
+| `enable_eck` | ECK operator (self-hosted ES) | `es_mode` | `/pavo/cells/<cluster>/eck_ready` SSM + **fail-fast** — a `self_hosted` ES CR *hard-fails* without ECK |
+| `enable_observability` *(planned — still an amenity, migrating here)* | in-VPC Grafana/Prometheus + OTel collector | `grafana_mode` | none — a misrouted cell just *drops* telemetry (soft), so no gate is warranted |
+
+- **Default `false`, opt-in per cell** — a cloud cell must not run an idle operator / unused monitoring stack.
+- **Set `true` in `cells/<cluster>/<cluster>.tfvars`** by whoever provisions the cell: the **customer** (mirrored module, their admin, they audit it) or **Pavo** at onboarding. Recorded in tfvars so it can't silently regress; never automatic, never a runtime toggle. Self-hosted customer → both `true`, paired with the matching instance flag.
+- **Cell-level, not per-instance:** the substrate is cluster-scoped (one operator / one Grafana per cell), so a per-instance flag can't create it. `es_mode`/`grafana_mode` only **route**. Only ES adds a readiness gate (`eck_ready` fail-fast) because its failure is hard; observability's is soft, so `enable_observability` + `grafana_mode` are simply set together.
