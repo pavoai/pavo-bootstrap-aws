@@ -599,7 +599,7 @@ aws eks delete-access-entry \
    ]
    ```
 
-4. Paste the CMK ARN into the Omnistrate UI under `db_kms_key_arn`. The
+4. Paste the CMK ARN into the Omnistrate UI under `cell_kms_key_arn`. The
    instance won't provision until set (`required: true`).
 
 5. **Note on the same CMK serving dual duty**: this single CMK encrypts both
@@ -607,7 +607,7 @@ aws eks delete-access-entry \
    2-4 grant the workload role what RDS needs to provision both. Statement 5
    grants the ESO role what it needs to decrypt the secret at runtime.
 
-6. The `db_kms_key_arn` value can be either a **key ARN** (`arn:aws:kms:<region>:<account>:key/<uuid>`)
+6. The `cell_kms_key_arn` value can be either a **key ARN** (`arn:aws:kms:<region>:<account>:key/<uuid>`)
    or an **alias ARN** (`arn:aws:kms:<region>:<account>:alias/<name>`). Both
    work — RDS resolves either at instance creation time. **Aliases are
    accepted for create-time convenience only — not for rotation.** Reasons to
