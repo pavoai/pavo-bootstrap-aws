@@ -16,10 +16,13 @@ fullnameOverride: pavo-otel-collector
 mode: deployment
 replicaCount: 1
 
+# contrib distro: the k8s distro omits the prometheusremotewrite exporter this
+# collector needs to write app OTLP metrics into the in-VPC Prometheus. The tag
+# defaults to the chart's appVersion. command.name is the in-image binary name.
 image:
-  repository: otel/opentelemetry-collector-k8s
+  repository: otel/opentelemetry-collector-contrib
 command:
-  name: otelcol-k8s
+  name: otelcol-contrib
 
 ports:
   otlp:
