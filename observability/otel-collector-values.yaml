@@ -1,0 +1,86 @@
+# open-telemetry/opentelemetry-collector values — the in-VPC OTel collector.
+#
+# Apps on a grafana_mode=self_hosted instance send OTLP/HTTP metrics to this
+# collector's ClusterIP Service; it remote-writes them to the in-VPC Prometheus.
+# Zero egress: the only exporter targets an in-cluster .svc address.
+#
+# Deployment + ClusterIP Service (in-VPC-stack convention). Values deep-merge
+# with the chart defaults, so we null the defaults we don't use (gRPC,
+# jaeger/zipkin/prometheus receivers, debug exporter, traces/logs pipelines) —
+# Helm prints cosmetic "cannot overwrite table" warnings; the deletes still apply.
+# Traces + gen_ai scrub are a follow-up (no in-VPC traces backend yet).
+# Stable Service name apps target: pavo-otel-collector.pavo-observability.svc:4318
+# (without this, the chart would derive pavo-otel-opentelemetry-collector).
+fullnameOverride: pavo-otel-collector
+
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+command:
+  name: otelcol-k8s
+
+ports:
+  otlp:
+    enabled: false
+  otlp-http:
+    enabled: true
+    containerPort: 4318
+    servicePort: 4318
+    protocol: TCP
+  jaeger-compact: { enabled: false }
+  jaeger-thrift: { enabled: false }
+  jaeger-grpc: { enabled: false }
+  zipkin: { enabled: false }
+  # Collector self-telemetry (:8888) — kept on so the stack can monitor its own
+  # collector health; scraped via the podAnnotations below.
+  metrics: { enabled: true }
+
+# Expose the collector's own /metrics (:8888) to the in-VPC Prometheus's
+# annotation-based scrape job.
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8888"
+  prometheus.io/path: "/metrics"
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { cpu: 500m, memory: 512Mi }
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc: null
+        http:
+          endpoint: ${env:MY_POD_IP}:4318
+    jaeger: null
+    zipkin: null
+    prometheus: null
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch: {}
+  exporters:
+    debug: null
+    prometheusremotewrite:
+      endpoint: http://pavo-observability-prometheus-server.pavo-observability.svc/api/v1/write
+  service:
+    pipelines:
+      traces: null
+      logs: null
+      # DOUBLE-INGEST GUARD: app *metrics* are currently SCRAPED from each app's
+      # /metrics endpoint (see prometheus-values.yaml.tftpl). This pipeline
+      # remote-writes any OTLP metrics the collector receives into the SAME
+      # Prometheus — so do NOT enable OTLP metric export in the app SDKs while
+      # scraping is active, or series will be double-counted. The intended
+      # end-state is a per-signal split: metrics via scrape, traces/logs via OTLP
+      # (add those pipelines when a traces/logs backend lands). Until then no app
+      # pushes OTLP metrics, so there is no double-count today.
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [prometheusremotewrite]

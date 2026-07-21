@@ -125,3 +125,140 @@ variable "eck_operator_chart_version" {
   type        = string
   default     = "3.4.0"
 }
+
+# -----------------------------------------------------------------------------
+# In-VPC observability (self-hosted Grafana/Prometheus) — opt-in per cell.
+# Mirrors enable_eck. When true, bootstrap installs the metrics stack + the OTel
+# collector into the pavo-observability namespace. See README "Cell self-hosting
+# flags". No readiness SSM: a grafana_mode=self_hosted misroute just drops
+# telemetry (soft), unlike ECK's hard failure.
+# -----------------------------------------------------------------------------
+variable "enable_observability" {
+  description = <<-EOT
+    Install the in-VPC observability stack (Prometheus + Grafana + Postgres +
+    OTel collector) on this cell, for customers whose telemetry must not leave
+    the VPC (grafana_mode = self_hosted). Opt-in per cell, DEFAULTS OFF — a
+    cloud-observability cell must not run an unused monitoring stack.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "observability_grafana_host" {
+  description = <<-EOT
+    Public hostname the in-VPC Grafana is served at (the cell's external
+    endpoint). Grafana's ingress host is grafana.<this>, and root_url derives
+    from it. Required when enable_observability = true.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "pavo_app_alerts_enabled" {
+  description = <<-EOT
+    Route Prometheus alerts to Pavo (via the in-VPC alert sanitizer, 8-key
+    metadata only) in addition to the customer's own webhook. When false, only
+    the customer webhook leg is wired. Independent of enable_observability.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "customer_alert_webhook_url" {
+  description = <<-EOT
+    Customer's own alert-receiver URL. Alertmanager posts the raw alert here
+    (via a Secret file, never the break-glass-readable ConfigMap). Required only
+    if you want customer alert delivery; empty disables the customer leg.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pavo_alert_webhook_url" {
+  description = <<-EOT
+    Pavo's alert-ingest URL the sanitizer forwards 8-key metadata to (DESTINATION_URL
+    via a Secret, never a literal). Required only when pavo_app_alerts_enabled = true.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "customer_name" {
+  description = <<-EOT
+    Human-readable customer/tenant name, stamped as CUSTOMER_NAME into the alert
+    sanitizer's 8-key metadata allowlist (only used when pavo_app_alerts_enabled).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "sanitizer_image" {
+  description = <<-EOT
+    Fully-pinned, cosign-signed digest of the pavo-alert-sanitizer image
+    (ghcr.io/pavoai/pavo-alert-sanitizer@sha256:...). The cell ClusterImagePolicy
+    admits ONLY the signed digest, so this must be a real digest from the signing
+    pipeline (see observability/sanitizer/SIGNING.md), not a tag. The sanitizer
+    Deployment is applied only when pavo_app_alerts_enabled = true AND this is set;
+    empty (default) means the Pavo alert leg stays off until the image is built.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "pavo_webhook_cidr" {
+  description = <<-EOT
+    CIDR of the Pavo alert-ingest endpoint the sanitizer forwards 8-key metadata
+    to. Only used to render the sanitizer's egress NetworkPolicy leg (inert until
+    CNI network-policy enforcement is on). Empty = that leg is not rendered.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "customer_alert_cidr" {
+  description = <<-EOT
+    CIDR of the customer's own alert receiver, for the Alertmanager egress
+    NetworkPolicy leg (inert until CNI network-policy enforcement is on). Empty =
+    that leg is not rendered; the SG-level egress default-deny remains the control.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "observability_prometheus_chart_version" {
+  description = "Helm chart version for prometheus-community/prometheus."
+  type        = string
+  default     = "29.17.0"
+}
+
+variable "observability_grafana_chart_version" {
+  description = "Helm chart version for grafana/grafana."
+  type        = string
+  default     = "10.5.15"
+}
+
+variable "observability_postgres_chart_version" {
+  description = "Helm chart version for bitnami/postgresql (Grafana metadata backend)."
+  type        = string
+  default     = "18.7.13"
+}
+
+variable "observability_otel_collector_chart_version" {
+  description = "Helm chart version for open-telemetry/opentelemetry-collector."
+  type        = string
+  default     = "0.108.0"
+}
+
+variable "cell_kms_key_arn" {
+  description = <<-EOT
+    The cell's single customer-managed KMS key ARN — encrypts everything at rest
+    under the customer's own key (RDS, self-hosted ES + snapshots, and the in-VPC
+    observability volumes). One key for the whole deployment: least customer
+    effort, uniform key custody. Required when enable_observability = true (used
+    for the gp3-cmk StorageClass the observability PVCs bind to).
+  EOT
+  type        = string
+  default     = ""
+}

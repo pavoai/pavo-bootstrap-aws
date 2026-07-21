@@ -1,0 +1,89 @@
+# The Pavo metadata alert leg: Alertmanager POSTs alerts to this in-cluster
+# Service; the sanitizer projects each to the 8-key allowlist and forwards to
+# DESTINATION_URL (from a Secret — never a literal, since the break-glass Role can
+# read ConfigMaps/pods). Applied by observability.tf ONLY when
+# pavo_app_alerts_enabled = true AND sanitizer_image is a real signed digest.
+#
+# Templated: ${"$"}{sanitizer_image} MUST be a cosign-signed digest — the cell
+# ClusterImagePolicy admits only the signed ghcr.io/pavoai/pavo-alert-sanitizer
+# digest from CI (see observability/sanitizer/SIGNING.md). ${"$"}{cell_id} /
+# ${"$"}{aws_region} / ${"$"}{customer_name} stamp the cell identity metadata.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pavo-alert-sanitizer
+  namespace: pavo-observability
+  labels:
+    app.kubernetes.io/name: pavo-alert-sanitizer
+    app.kubernetes.io/part-of: pavo-observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pavo-alert-sanitizer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pavo-alert-sanitizer
+        app.kubernetes.io/part-of: pavo-observability
+    spec:
+      # The sanitizer makes no Kubernetes API calls — don't mount a SA token.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sanitizer
+          image: ${sanitizer_image}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: DESTINATION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pavo-alert-webhook
+                  key: url
+            - name: CUSTOMER_NAME
+              value: "${customer_name}"
+            - name: DELIVERY_POLICY
+              value: best_effort_ack # Pavo leg is best-effort (customer leg is primary + separate)
+            - name: DEPLOYMENT_ID
+              value: "${cell_id}"
+            - name: INSTANCE_ID
+              value: "${cell_id}"
+            - name: AWS_REGION
+              value: "${aws_region}"
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pavo-alert-sanitizer
+  namespace: pavo-observability
+  labels:
+    app.kubernetes.io/name: pavo-alert-sanitizer
+spec:
+  selector:
+    app.kubernetes.io/name: pavo-alert-sanitizer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

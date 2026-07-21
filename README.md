@@ -662,6 +662,65 @@ possible one.
    entry, cluster-scoped K8s resources, and `/pavo/cells/<eks_cluster_name>/*`
    SSM parameters; applied **once per deployment cell**.
 
+## In-VPC observability (self-hosted Grafana / Prometheus / OTel)
+
+For customers whose telemetry must not leave the VPC (`grafana_mode = self_hosted`,
+e.g. BCBSNC). Opt-in per cell — a cloud-observability cell must not run an unused
+monitoring stack. Everything installs from this module's single `terraform apply`
+into the `pavo-observability` namespace: Prometheus (in-VPC TSDB), Grafana
+(internal `pavo-nginx` ingress, dashboards-as-code), Postgres (Grafana backend),
+and the `pavo-otel-collector`. All PVCs bind the customer's one CMK. **Zero
+external egress for telemetry**: metrics, dashboards, and scraping stay entirely
+in-cluster. The one deliberate exception is alerting: if `pavo_app_alerts_enabled`
+or `customer_alert_webhook_url` is set, Alertmanager posts alerts out to those
+endpoints (the customer webhook is the customer's own receiver, often in-VPC). With
+both unset — the default — nothing leaves the cluster.
+
+### Flags — who sets what
+
+| Variable | Who sets it | Effect |
+|---|---|---|
+| `enable_observability` | **Pavo operator**, per cell, at bootstrap | Installs the whole stack. Default `false`. Set `true` on any cell that will host a `grafana_mode=self_hosted` instance. |
+| `observability_grafana_host` | Pavo operator | Public hostname Grafana serves at; ingress host becomes `grafana.<this>`. Required when `enable_observability = true`. |
+| `cell_kms_key_arn` | **Customer** (the one CMK) | Encrypts the observability PVCs (`gp3-cmk`). Same key the instance module uses for RDS/ES/Zitadel — one key for everything. |
+| `pavo_app_alerts_enabled` | Pavo operator | Also routes Prometheus alerts to Pavo via the in-VPC sanitizer (8-key metadata only). Default `false` = customer-webhook leg only. Requires a real signed `sanitizer_image` — the sanitizer stays off until that image is built (the cell ClusterImagePolicy admits only signed digests). |
+| `customer_alert_webhook_url` | Customer (optional) | Alertmanager posts raw alerts here (via a Secret, never a break-glass-readable ConfigMap). Empty = no customer leg. |
+
+The matching per-instance flag is `grafana_mode` (`cloud` default | `self_hosted`),
+set on the Omnistrate instance. It only routes telemetry in-VPC when this cell was
+bootstrapped with `enable_observability = true`.
+
+### How metrics flow
+
+Every Pavo app service exposes a `prometheus_client` `/metrics` endpoint, so the
+in-VPC Prometheus **scrapes** them via the standard `prometheus.io/scrape` pod
+annotations (the app charts set these). The OTel collector + `remote_write`
+receiver are also wired for the eventual move to 100% OTel push, but scraping is
+the near-term path. Infra metrics come from in-VPC kube-state-metrics +
+node-exporter. No metric ever leaves the VPC.
+
+### Applying
+
+Set the flags in your `terraform.tfvars` (or `-var`) and run the normal
+`terraform apply` (see **Apply** above) — the stack is part of this module, not a
+separate step:
+
+```hcl
+enable_observability       = true
+observability_grafana_host = "cell.example.com"   # Grafana at grafana.cell.example.com
+cell_kms_key_arn           = "arn:aws:kms:us-east-1:<acct>:key/<uuid>"
+# pavo_app_alerts_enabled  = true   # only once a signed sanitizer image exists
+```
+
+### Dashboards
+
+Dashboards are **as-code** — ConfigMaps labelled `grafana_dashboard`, loaded by the
+Grafana sidecar (`observability/manifests/`). They evolve by **bumping this
+module's version** (edit the JSON, tag, customers pick it up on their next apply).
+For an urgent fix without a release, apply the ConfigMap directly:
+`kubectl apply -f observability/manifests/<dashboard>.yaml -n pavo-observability`
+(and back-port the edit into the module so the next apply doesn't revert it).
+
 ## Ownership rules
 
 Resources are scoped at one of four levels. The level determines which

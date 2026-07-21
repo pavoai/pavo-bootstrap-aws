@@ -1,0 +1,28 @@
+# bitnami/postgresql values — Grafana's metadata backend (users/org/dashboard
+# instances only; NOT customer data). Dashboards are as-code, so loss is
+# recoverable by reinstall + reload. No backup in v1.
+
+fullnameOverride: pavo-observability-postgres
+
+auth:
+  username: grafana
+  database: grafana
+  existingSecret: pavo-grafana-postgres
+  secretKeys:
+    adminPasswordKey: postgres-password
+    userPasswordKey: password
+
+primary:
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: gp3-cmk
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+architecture: standalone
