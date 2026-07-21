@@ -75,12 +75,6 @@ resource "random_password" "grafana_admin" {
   special = false
 }
 
-resource "random_password" "grafana_pg_superuser" {
-  count   = local.obs_count
-  length  = 24
-  special = false
-}
-
 resource "random_password" "grafana_pg_user" {
   count   = local.obs_count
   length  = 24
@@ -106,10 +100,10 @@ resource "kubernetes_secret_v1" "grafana_postgres" {
     name      = "pavo-grafana-postgres"
     namespace = local.obs_ns
   }
-  # bitnami postgres existingSecret contract: superuser + grafana-user passwords.
+  # The official postgres image creates user `grafana` (POSTGRES_USER) as the DB
+  # owner, so a single password is all Grafana and the DB need.
   data = {
-    "postgres-password" = random_password.grafana_pg_superuser[0].result
-    "password"          = random_password.grafana_pg_user[0].result
+    "password" = random_password.grafana_pg_user[0].result
   }
   depends_on = [kubernetes_namespace_v1.observability]
 }
@@ -142,17 +136,125 @@ resource "kubernetes_secret_v1" "pavo_alert_webhook" {
   depends_on = [kubernetes_namespace_v1.observability]
 }
 
-# ---- Helm releases ------------------------------------------------------------
-resource "helm_release" "observability_postgres" {
+# ---- Postgres (Grafana metadata backend) --------------------------------------
+# Grafana's own metadata (users/orgs/datasources/annotations) only — NOT metrics
+# (those live in Prometheus) and NOT customer data. Dashboards are as-code, so
+# loss is recoverable by reload; no backup in v1. A single StatefulSet on the
+# official, patched postgres image (not Bitnami, whose free charts were retired
+# to bitnamilegacy in 2025). Single-replica: Grafana itself is single-replica, so
+# DB HA would only guard a SPOF behind another SPOF — add CloudNativePG if/when
+# Grafana goes multi-replica with a UI uptime SLO.
+resource "kubernetes_service_v1" "observability_postgres" {
   count = local.obs_count
+  metadata {
+    name      = "pavo-observability-postgres"
+    namespace = local.obs_ns
+  }
+  spec {
+    cluster_ip = "None" # headless: the StatefulSet owns the single stable pod DNS
+    selector   = { app = "pavo-observability-postgres" }
+    port {
+      name        = "postgres"
+      port        = 5432
+      target_port = 5432
+    }
+  }
+  depends_on = [kubernetes_namespace_v1.observability]
+}
 
-  name       = "pavo-observability-postgres"
-  namespace  = local.obs_ns
-  repository = "https://charts.bitnami.com/bitnami"
-  chart      = "postgresql"
-  version    = var.observability_postgres_chart_version
-  values     = [file("${path.module}/observability/postgres-values.yaml")]
-
+resource "kubernetes_stateful_set_v1" "observability_postgres" {
+  count = local.obs_count
+  metadata {
+    name      = "pavo-observability-postgres"
+    namespace = local.obs_ns
+    labels    = { app = "pavo-observability-postgres" }
+  }
+  spec {
+    service_name = "pavo-observability-postgres"
+    replicas     = 1
+    selector {
+      match_labels = { app = "pavo-observability-postgres" }
+    }
+    template {
+      metadata {
+        labels = { app = "pavo-observability-postgres" }
+      }
+      spec {
+        # postgres uid/gid in the official Debian image is 999; fs_group makes the
+        # CMK-encrypted PVC group-writable so it can run non-root.
+        security_context {
+          run_as_user  = 999
+          run_as_group = 999
+          fs_group     = 999
+        }
+        container {
+          name  = "postgres"
+          image = "postgres:17"
+          port {
+            name           = "postgres"
+            container_port = 5432
+          }
+          env {
+            name  = "POSTGRES_USER"
+            value = "grafana"
+          }
+          env {
+            name  = "POSTGRES_DB"
+            value = "grafana"
+          }
+          env {
+            name = "POSTGRES_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = "pavo-grafana-postgres"
+                key  = "password"
+              }
+            }
+          }
+          # Subdir so initdb doesn't trip over the volume's lost+found.
+          env {
+            name  = "PGDATA"
+            value = "/var/lib/postgresql/data/pgdata"
+          }
+          volume_mount {
+            name       = "data"
+            mount_path = "/var/lib/postgresql/data"
+          }
+          readiness_probe {
+            exec {
+              command = ["pg_isready", "-U", "grafana", "-d", "grafana"]
+            }
+            initial_delay_seconds = 10
+            period_seconds        = 10
+          }
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "256Mi"
+            }
+            limits = {
+              cpu    = "500m"
+              memory = "512Mi"
+            }
+          }
+        }
+      }
+    }
+    volume_claim_template {
+      metadata {
+        name = "data"
+      }
+      spec {
+        access_modes       = ["ReadWriteOnce"]
+        storage_class_name = "gp3-cmk"
+        resources {
+          requests = {
+            storage = "8Gi"
+          }
+        }
+      }
+    }
+  }
   depends_on = [
     kubernetes_namespace_v1.observability,
     kubernetes_secret_v1.grafana_postgres,
@@ -160,6 +262,7 @@ resource "helm_release" "observability_postgres" {
   ]
 }
 
+# ---- Helm releases ------------------------------------------------------------
 resource "helm_release" "observability_prometheus" {
   count = local.obs_count
 
@@ -204,7 +307,7 @@ resource "helm_release" "observability_grafana" {
   depends_on = [
     kubernetes_namespace_v1.observability,
     kubernetes_secret_v1.grafana_admin,
-    helm_release.observability_postgres,
+    kubernetes_stateful_set_v1.observability_postgres,
     helm_release.observability_prometheus,
   ]
 }

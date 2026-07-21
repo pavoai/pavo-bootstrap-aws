@@ -239,12 +239,6 @@ variable "observability_grafana_chart_version" {
   default     = "10.5.15"
 }
 
-variable "observability_postgres_chart_version" {
-  description = "Helm chart version for bitnami/postgresql (Grafana metadata backend)."
-  type        = string
-  default     = "18.7.13"
-}
-
 variable "observability_otel_collector_chart_version" {
   description = "Helm chart version for open-telemetry/opentelemetry-collector."
   type        = string

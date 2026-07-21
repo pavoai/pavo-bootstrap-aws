@@ -48,6 +48,7 @@ alertmanager:
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 3h
+%{ if customer_leg_enabled || pavo_leg_enabled ~}
       routes:
 %{ if customer_leg_enabled ~}
         - receiver: customer
@@ -56,6 +57,7 @@ alertmanager:
 %{ if pavo_leg_enabled ~}
         - receiver: pavo-sanitizer
           continue: false
+%{ endif ~}
 %{ endif ~}
     receivers:
       - name: "null"

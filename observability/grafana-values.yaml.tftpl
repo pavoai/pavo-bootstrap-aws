@@ -43,6 +43,11 @@ envValueFrom:
       name: pavo-grafana-postgres
       key: password
 
+# Namespaced RBAC: the sidecar only watches pavo-observability, so a Role is
+# sufficient — no cluster-scoped ClusterRole (least privilege for BYOC).
+rbac:
+  namespaced: true
+
 sidecar:
   dashboards:
     enabled: true
