@@ -1,0 +1,78 @@
+# grafana/grafana values — in-VPC Grafana. Templated by observability.tf with
+# ${grafana_host} (the cell's external hostname).
+#
+# Invariants: telemetry OFF (no phone-home); Postgres metadata backend;
+# in-VPC Prometheus datasource only; dashboards as-code via the sidecar.
+
+fullnameOverride: pavo-observability-grafana
+
+admin:
+  existingSecret: pavo-grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+
+adminUser: ""
+adminPassword: ""
+
+grafana.ini:
+  server:
+    domain: "${grafana_host}"
+    root_url: "https://grafana.%(domain)s"
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+    check_for_plugin_updates: false
+  auth.anonymous:
+    enabled: false
+  plugins:
+    plugin_admin_enabled: false
+  database:
+    type: postgres
+    host: pavo-observability-postgres:5432
+    name: grafana
+    user: grafana
+
+env:
+  GF_ANALYTICS_REPORTING_ENABLED: "false"
+  GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+  GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+  GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+envValueFrom:
+  GF_DATABASE_PASSWORD:
+    secretKeyRef:
+      name: pavo-grafana-postgres
+      key: password
+
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    searchNamespace: pavo-observability
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        isDefault: true
+        url: http://pavo-observability-prometheus-server.pavo-observability.svc
+
+ingress:
+  enabled: true
+  ingressClassName: pavo-nginx
+  hosts:
+    - "grafana.${grafana_host}"
+
+persistence:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

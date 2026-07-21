@@ -1,0 +1,106 @@
+# Default-deny egress + allowlist for the observability namespace (defense-in-depth).
+# STAGED: only ENFORCES once the cell's CNI network-policy feature is on; until
+# then it is inert (the SG egress default-deny is the ENI-level backstop). Applied
+# now so the allowlist is already correct when enforcement is turned on.
+#
+# ⚠️ BEFORE ENABLING CNI ENFORCEMENT, reconcile the app-scrape rule below: its
+# hardcoded metrics-port list {8000,8080,8081,8082} is coupled to each scraped
+# app's service.port. A new/changed scraped service on a port not listed here
+# would be silently dropped once enforcement is on — the exact failure this rule
+# closes. (Same reconcile bucket as the prometheus.io/port app-chart follow-up.)
+#
+# Templated by observability.tf: ${"$"}{vpc_cidr} (k8s API reachability, in-VPC),
+# and the two OPTIONAL alert-egress legs render only when their CIDR var is set.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pavo-observability-egress
+  namespace: pavo-observability
+spec:
+  podSelector: {} # base allows for every observability pod
+  policyTypes: [Egress]
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Intra-namespace: Grafana <-> Postgres <-> Prometheus <-> Alertmanager <-> sanitizer
+    # (also covers the in-namespace kube-state-metrics + node-exporter scrapes)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pavo-observability
+    # k8s API — Grafana sidecar watches ConfigMaps; Prometheus SD lists endpoints.
+    # The API server ENI lives in the VPC, so the VPC CIDR covers it (in-VPC only).
+    - to:
+        - ipBlock: { cidr: ${vpc_cidr} }
+      ports:
+        - { protocol: TCP, port: 443 }
+    # Scrape ONLY the ES exporter pods, wherever the instance namespace lands
+    # (service-name/label based — not any pod on 9114, not ns-pinned).
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: pavo-es-exporter
+      ports:
+        - { protocol: TCP, port: 9114 }
+    # Scrape app /metrics (the near-term app-metrics path). Prometheus's
+    # kubernetes-pods job scrapes prometheus.io/scrape-annotated app pods in the
+    # instance namespace on their http port. NetworkPolicy can't match an
+    # annotation, so allow the app http/metrics ports across namespaces. This
+    # completes the allowlist BEFORE CNI enforcement — otherwise turning
+    # enforcement on would silently drop app scraping.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: TCP, port: 8000 } # intern, tribal-knowledge
+        - { protocol: TCP, port: 8080 } # api-gateway, onboarding-copy
+        - { protocol: TCP, port: 8081 } # exec-runner
+        - { protocol: TCP, port: 8082 } # capability-proxy
+%{ if pavo_webhook_cidr != "" ~}
+---
+# Alert egress is least-privilege: ONLY the sanitizer pods may reach the Pavo
+# webhook CIDR (metadata-only). Scoped to the sanitizer, not the whole namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pavo-observability-sanitizer-egress
+  namespace: pavo-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pavo-alert-sanitizer
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: { cidr: ${pavo_webhook_cidr} }
+      ports:
+        - { protocol: TCP, port: 443 }
+%{ endif ~}
+%{ if customer_alert_cidr != "" ~}
+---
+# The customer raw-alert leg egresses from Alertmanager (via url_file) to the
+# customer's own endpoint. Scoped to the Alertmanager pod so the allowlist is
+# COMPLETE before CNI enforcement is turned on — otherwise enabling enforcement
+# would silently drop the customer leg.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pavo-observability-alertmanager-egress
+  namespace: pavo-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: { cidr: ${customer_alert_cidr} }
+      ports:
+        - { protocol: TCP, port: 443 }
+%{ endif ~}

@@ -1,0 +1,13 @@
+# Break-glass read-only Role — present-and-inert so a per-session RoleBinding can
+# bind to it during an incident. NO RoleBinding is shipped (a standing binding =
+# standing access). `secrets` is intentionally excluded so the Grafana/Postgres/
+# webhook secrets stay unreadable to Pavo support. See observability/README.md.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pavo-support-readonly
+  namespace: pavo-observability
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]

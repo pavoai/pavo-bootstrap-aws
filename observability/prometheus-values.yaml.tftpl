@@ -1,0 +1,209 @@
+# prometheus-community/prometheus values — in-VPC, zero-egress metrics store.
+#
+# Invariants: NO remote_write OUT / CloudWatch / GMP -> metrics never leave the
+# VPC. The remote-write *receiver* (--web.enable-remote-write-receiver) is an
+# INBOUND, in-cluster path only (the OTel collector -> here), so zero-egress holds.
+# scrapeConfigs is nulled to drop ALL built-in broad discovery; we add only the
+# named jobs below (ES exporter + KSM + node-exporter + self).
+#
+# Templated by observability.tf: the Alertmanager route/receiver legs render only
+# for the legs actually configured (${"$"}{customer_leg_enabled} / ${"$"}{pavo_leg_enabled});
+# with neither set, every alert routes to the "null" receiver (no phantom POSTs).
+
+server:
+  retention: "15d"
+  extraFlags:
+    - web.enable-lifecycle
+    - storage.tsdb.retention.size=15GB
+    # Accept remote-write from the in-VPC OTel collector (app metrics). Inbound,
+    # in-cluster only — no egress.
+    - web.enable-remote-write-receiver
+  global:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - pavo-observability-prometheus-alertmanager:9093
+  persistentVolume:
+    enabled: true
+    size: 20Gi
+    storageClass: gp3-cmk
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 3Gi
+
+alertmanager:
+  enabled: true
+  persistence:
+    enabled: false
+  config:
+    route:
+      receiver: "null"
+      group_by: [alertname, severity]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 3h
+      routes:
+%{ if customer_leg_enabled ~}
+        - receiver: customer
+          continue: true
+%{ endif ~}
+%{ if pavo_leg_enabled ~}
+        - receiver: pavo-sanitizer
+          continue: false
+%{ endif ~}
+    receivers:
+      - name: "null"
+%{ if customer_leg_enabled ~}
+      - name: customer
+        webhook_configs:
+          - url_file: /etc/alertmanager/secrets/customer-alert-webhook/url
+            send_resolved: true
+%{ endif ~}
+%{ if pavo_leg_enabled ~}
+      - name: pavo-sanitizer
+        webhook_configs:
+          - url: http://pavo-alert-sanitizer.pavo-observability.svc:8080/alert
+            send_resolved: true
+%{ endif ~}
+%{ if customer_leg_enabled ~}
+  extraSecretMounts:
+    - name: customer-alert-webhook
+      secretName: customer-alert-webhook
+      mountPath: /etc/alertmanager/secrets/customer-alert-webhook
+      readOnly: true
+%{ endif ~}
+
+# Drop ALL chart built-in broad scrape jobs; we add named jobs in serverFiles.
+scrapeConfigs: null
+
+# Infra metrics: in-VPC KSM + node-exporter (scraped by the named jobs below).
+kube-state-metrics:
+  enabled: true
+prometheus-node-exporter:
+  enabled: true
+prometheus-pushgateway:
+  enabled: false
+
+serverFiles:
+  prometheus.yml:
+    rule_files:
+      - /etc/config/alerting_rules.yml
+    scrape_configs:
+      # App metrics (near-term) are SCRAPED from each app's /metrics endpoint by
+      # the kubernetes-pods job below (prometheus.io/scrape annotations). The OTel
+      # collector's remote-write path is also wired for the eventual move to OTLP
+      # push, but scraping is the active app-metrics path today.
+      #
+      # ES exporter. Service-name-based (bootstrap is cell-scoped and does not
+      # know the instance namespace); on a 1-instance strict cell only the
+      # instance's pavo-es-exporter Service matches. keep on Service name + port.
+      - job_name: pavo-es-exporter
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: pavo-es-exporter
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: metrics
+      # Infra: kube-state-metrics (pod/deployment/node object state).
+      - job_name: kube-state-metrics
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - pavo-observability
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: pavo-observability-prometheus-kube-state-metrics
+      # Infra: node-exporter (node CPU/mem/disk/network). DaemonSet -> per-pod.
+      - job_name: node-exporter
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - pavo-observability
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: pavo-observability-prometheus-prometheus-node-exporter
+      # App metrics (near-term). Every Pavo app service exposes a prometheus_client
+      # /metrics endpoint; the SDK OTLP push path is not yet universal (only some
+      # services emit it), so scrape /metrics from any pod that opts in via the
+      # standard prometheus.io/scrape annotations. The OTel collector + remote-write
+      # path stays wired for the eventual move to 100% OTel. Zero egress: scrape
+      # traffic is in-cluster only.
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      - job_name: prometheus
+        static_configs:
+          - targets:
+              - localhost:9090
+
+  alerting_rules.yml:
+    groups:
+      - name: elasticsearch
+        rules:
+          - alert: ESClusterRed
+            expr: elasticsearch_cluster_health_status{color="red"} == 1
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "ES cluster RED ({{ $labels.cluster }})"
+          - alert: ESClusterYellow
+            expr: elasticsearch_cluster_health_status{color="yellow"} == 1
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ES cluster YELLOW ({{ $labels.cluster }})"
+          - alert: ESUnassignedShards
+            expr: elasticsearch_cluster_health_unassigned_shards > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "ES has unassigned shards ({{ $labels.cluster }})"
+          - alert: ESDiskFloodWatermark
+            expr: (elasticsearch_filesystem_data_available_bytes / elasticsearch_filesystem_data_size_bytes) < 0.05
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "ES node <5% disk free ({{ $labels.name }} {{ $labels.path }})"
+          - alert: ESExporterDown
+            expr: absent(up{job="pavo-es-exporter"}) or max(up{job="pavo-es-exporter"}) < 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Elasticsearch exporter not scrapeable"
