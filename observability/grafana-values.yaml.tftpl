@@ -68,8 +68,17 @@ datasources:
 ingress:
   enabled: true
   ingressClassName: pavo-nginx
+  # Real cert from cert-manager (same issuer the frontend uses) — without this the
+  # pavo-nginx controller serves its default self-signed cert, and the frontend's
+  # HSTS (includeSubDomains on *.pavoai.dev) makes browsers hard-block it.
+  annotations:
+    cert-manager.io/cluster-issuer: pavo-letsencrypt-prod
   hosts:
     - "grafana.${grafana_host}"
+  tls:
+    - hosts:
+        - "grafana.${grafana_host}"
+      secretName: pavo-observability-grafana-tls
 
 persistence:
   enabled: false
