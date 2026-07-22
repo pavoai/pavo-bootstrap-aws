@@ -31,3 +31,20 @@ enable_eck = true
 enable_observability       = true
 observability_grafana_host = "awstest.pavoai.dev"
 cell_kms_key_arn           = "arn:aws:kms:us-east-1:453542520145:key/81389baa-ae65-44eb-8dea-426a06be52d9"
+
+# Pavo alert leg: route Prometheus alerts through the in-VPC sanitizer (9-key
+# metadata only) to the Pavo-central pavo-alert-forwarder, which relays them to
+# #pavo-vpc-alerts. The sanitizer image is cosign-signed and admitted by the
+# cell ClusterImagePolicy (image_policy_mode=enforce). The forwarder /32 is
+# Pavo-central (onboarding-455713) and identical for every cell; only
+# customer_name and the enable toggle are per-cell.
+#
+# pavo_alert_webhook_url and ghcr_dockerconfig are SECRETS, injected via TF_VAR
+# at apply (never committed): the webhook URL embeds the forwarder's path secret
+# (https://pavo-alerts.pavoai.dev/h/<secret>) — the sanitizer sends no auth
+# header, so the URL is the credential — and ghcr_dockerconfig is the org ghcr
+# pull credential. In prod both come from the deploy pipeline's secret store.
+pavo_app_alerts_enabled = true
+customer_name           = "awstest"
+sanitizer_image         = "ghcr.io/pavoai/pavo-alert-sanitizer@sha256:2c583f51f427de586ee08c24026fe225b4c67e742faf57f92436022900df2622"
+pavo_webhook_cidr       = "34.69.60.12/32"

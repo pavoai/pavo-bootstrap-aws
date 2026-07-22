@@ -156,7 +156,7 @@ variable "observability_grafana_host" {
 
 variable "pavo_app_alerts_enabled" {
   description = <<-EOT
-    Route Prometheus alerts to Pavo (via the in-VPC alert sanitizer, 8-key
+    Route Prometheus alerts to Pavo (via the in-VPC alert sanitizer, 9-key
     metadata only) in addition to the customer's own webhook. When false, only
     the customer webhook leg is wired. Independent of enable_observability.
   EOT
@@ -177,8 +177,10 @@ variable "customer_alert_webhook_url" {
 
 variable "pavo_alert_webhook_url" {
   description = <<-EOT
-    Pavo's alert-ingest URL the sanitizer forwards 8-key metadata to (DESTINATION_URL
-    via a Secret, never a literal). Required only when pavo_app_alerts_enabled = true.
+    Pavo's alert-ingest URL the sanitizer forwards 9-key metadata to (DESTINATION_URL
+    via a Secret, never a literal). SECRET: the forwarder authenticates by URL path
+    (the sanitizer sends no auth header), so this embeds the path secret —
+    https://pavo-alerts.pavoai.dev/h/<secret>. Required when pavo_app_alerts_enabled = true.
   EOT
   type        = string
   default     = ""
@@ -188,7 +190,7 @@ variable "pavo_alert_webhook_url" {
 variable "customer_name" {
   description = <<-EOT
     Human-readable customer/tenant name, stamped as CUSTOMER_NAME into the alert
-    sanitizer's 8-key metadata allowlist (only used when pavo_app_alerts_enabled).
+    sanitizer's 9-key metadata allowlist (only used when pavo_app_alerts_enabled).
   EOT
   type        = string
   default     = ""
@@ -209,12 +211,26 @@ variable "sanitizer_image" {
 
 variable "pavo_webhook_cidr" {
   description = <<-EOT
-    CIDR of the Pavo alert-ingest endpoint the sanitizer forwards 8-key metadata
+    CIDR of the Pavo alert-ingest endpoint the sanitizer forwards 9-key metadata
     to. Only used to render the sanitizer's egress NetworkPolicy leg (inert until
     CNI network-policy enforcement is on). Empty = that leg is not rendered.
   EOT
   type        = string
   default     = ""
+}
+
+variable "ghcr_dockerconfig" {
+  description = <<-EOT
+    ghcr.io dockerconfigjson (org-scoped pavoai read credential — the SAME one
+    pavoInfra and the service Helm charts use for image pulls). Materialized as
+    the `pavo-ghcr-signature-pull` Secret in the pavo-observability namespace so
+    the sanitizer pod can pull its private ghcr.io/pavoai image, exactly as
+    zitadel-provisioner does in the instance namespace. Already base64-encoded
+    (stored via binary_data). Required only when the sanitizer is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "customer_alert_cidr" {

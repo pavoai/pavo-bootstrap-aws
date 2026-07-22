@@ -24,6 +24,12 @@ locals {
   # real signed image digest is provided — the cell ClusterImagePolicy admits only
   # the signed digest, so there is nothing to deploy until the signing build runs.
   obs_sanitizer_enabled = var.enable_observability && var.pavo_app_alerts_enabled && var.sanitizer_image != ""
+
+  # imagePullSecret the sanitizer pod uses to pull its private ghcr.io/pavoai
+  # image. Same name pavoInfra uses for every other non-Helm pavoai image (e.g.
+  # zitadel-provisioner), so the pull secret is identical across the platform —
+  # just materialized here because the bootstrap owns the observability namespace.
+  obs_ghcr_pull_secret = "pavo-ghcr-signature-pull"
 }
 
 # VPC CIDR for the (staged) egress NetworkPolicy's in-VPC k8s-API allowance.
@@ -132,6 +138,26 @@ resource "kubernetes_secret_v1" "pavo_alert_webhook" {
   }
   data = {
     url = var.pavo_alert_webhook_url
+  }
+  depends_on = [kubernetes_namespace_v1.observability]
+}
+
+# ghcr.io/pavoai pull credential for the sanitizer pod. Identical to pavoInfra's
+# kubernetes_secret_v1.ghcr_signature_pull (same name, same $secret.ghcr_dockerconfig
+# credential, same binary_data materialization) — the bootstrap creates it here
+# because it owns the pavo-observability namespace, where the sanitizer runs.
+# var.ghcr_dockerconfig is ALREADY base64-encoded (that's how the service charts
+# consume it); `data` would base64 it AGAIN and k8s would reject it, so use
+# binary_data to store the already-base64 value as-is.
+resource "kubernetes_secret_v1" "obs_ghcr_pull" {
+  count = local.obs_sanitizer_enabled ? 1 : 0
+  metadata {
+    name      = local.obs_ghcr_pull_secret
+    namespace = local.obs_ns
+  }
+  type = "kubernetes.io/dockerconfigjson"
+  binary_data = {
+    ".dockerconfigjson" = var.ghcr_dockerconfig
   }
   depends_on = [kubernetes_namespace_v1.observability]
 }
@@ -401,10 +427,11 @@ resource "kubectl_manifest" "obs_netpol" {
 data "kubectl_file_documents" "obs_sanitizer" {
   count = local.obs_sanitizer_enabled ? 1 : 0
   content = templatefile("${path.module}/observability/manifests/sanitizer.yaml.tftpl", {
-    sanitizer_image = var.sanitizer_image
-    customer_name   = var.customer_name
-    cell_id         = var.eks_cluster_name
-    aws_region      = var.aws_region
+    sanitizer_image  = var.sanitizer_image
+    customer_name    = var.customer_name
+    cell_id          = var.eks_cluster_name
+    aws_region       = var.aws_region
+    ghcr_pull_secret = local.obs_ghcr_pull_secret
   })
 }
 
@@ -420,5 +447,17 @@ resource "kubectl_manifest" "obs_sanitizer" {
   depends_on = [
     kubernetes_namespace_v1.observability,
     kubernetes_secret_v1.pavo_alert_webhook,
+    kubernetes_secret_v1.obs_ghcr_pull,
   ]
+
+  lifecycle {
+    precondition {
+      condition     = trimspace(var.ghcr_dockerconfig) != ""
+      error_message = "ghcr_dockerconfig must be set when the sanitizer is enabled — the pod pulls a private ghcr.io/pavoai image."
+    }
+    precondition {
+      condition     = trimspace(var.pavo_alert_webhook_url) != ""
+      error_message = "pavo_alert_webhook_url must be set when the sanitizer is enabled — an empty DESTINATION_URL breaks alert forwarding."
+    }
+  }
 }
