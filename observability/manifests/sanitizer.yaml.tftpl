@@ -1,5 +1,5 @@
 # The Pavo metadata alert leg: Alertmanager POSTs alerts to this in-cluster
-# Service; the sanitizer projects each to the 8-key allowlist and forwards to
+# Service; the sanitizer projects each to the 9-key allowlist and forwards to
 # DESTINATION_URL (from a Secret — never a literal, since the break-glass Role can
 # read ConfigMaps/pods). Applied by observability.tf ONLY when
 # pavo_app_alerts_enabled = true AND sanitizer_image is a real signed digest.
@@ -29,6 +29,11 @@ spec:
     spec:
       # The sanitizer makes no Kubernetes API calls — don't mount a SA token.
       automountServiceAccountToken: false
+      # ghcr.io/pavoai is private; pull with the org-scoped read credential the
+      # bootstrap materializes in this namespace (same one pavoInfra uses for
+      # every other private pavoai image, e.g. zitadel-provisioner).
+      imagePullSecrets:
+        - name: ${ghcr_pull_secret}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
