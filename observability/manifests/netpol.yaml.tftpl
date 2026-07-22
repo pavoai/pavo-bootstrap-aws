@@ -62,6 +62,7 @@ spec:
         - { protocol: TCP, port: 8080 } # api-gateway, onboarding-copy
         - { protocol: TCP, port: 8081 } # exec-runner
         - { protocol: TCP, port: 8082 } # capability-proxy
+        - { protocol: TCP, port: 10254 } # ingress-nginx controller metrics (edge RED)
 %{ if pavo_webhook_cidr != "" ~}
 ---
 # Alert egress is least-privilege: ONLY the sanitizer pods may reach the Pavo
