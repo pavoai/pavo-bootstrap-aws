@@ -215,6 +215,14 @@ serverFiles:
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
+        metric_relabel_configs:
+          # ingress-nginx edge metrics: keep RED (nginx_ingress_controller_requests +
+          # _request_duration_seconds) but drop the request/response SIZE histograms.
+          # Their series count is le × host × path × method × status — high cardinality
+          # on a busy cell for little value. Targets only the ingress metric names.
+          - source_labels: [__name__]
+            regex: nginx_ingress_controller_(request_size|response_size)_(bucket|sum|count)
+            action: drop
       - job_name: prometheus
         static_configs:
           - targets:
