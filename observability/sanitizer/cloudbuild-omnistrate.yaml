@@ -1,0 +1,290 @@
+# cloudbuild-omnistrate.yaml — pavo-alert-sanitizer: signed GHCR build (the CI).
+#
+# Runs via the `alert-sanitizer-omnistrate` Cloud Build trigger, which MUST run
+# AS the per-service signer SA `cloud-build-alert-sanitizer@onboarding-455713`
+# (mint it by adding the `alert-sanitizer` entry to spec/image-manifest.json +
+# applying central-ci/). That SA's OIDC identity is the cosign keyless subject
+# the cell ClusterImagePolicy (pavo-bootstrap-aws) trusts once enrolled.
+#
+# WHY this image needs signing: the sanitizer runs INSIDE the customer VPC (the
+# metadata-only alert-egress boundary, deployed by the pavo-observability
+# amenity). On a strict/prod cell the Sigstore ClusterImagePolicy admission
+# webhook validates every ghcr.io/pavoai/* image — an unsigned/unenrolled image
+# is REJECTED at admission and the pod never starts. Same class as
+# zitadel-provisioner (customer-VPC runtime), unlike ci-security-tools
+# (CI-internal, never admitted into a cell).
+#
+# NAMING (decoupled on purpose): the manifest KEY is `alert-sanitizer` (drives
+# the signer SA `cloud-build-alert-sanitizer` — kept ≤ 18 chars so the SA
+# account_id stays under GCP's 30-char limit) while the GHCR image is
+# `pavo-alert-sanitizer` (the manifest `ghcr_name`). central-ci and
+# pavo-bootstrap-aws both key the signer identity / policy name off the KEY;
+# the image glob keys off `ghcr_name`.
+#
+# Pipeline: build → lint-trivyignore → scan-image (blocking) → push → capture
+# digest → image CycloneDX SBOM + cosign-vuln → cosign keyless sign + BOTH
+# attestations → verify-signature (SA drift guard) → print the digest to pin.
+#
+# Handoff is deliberately manual: the printed digest is pinned into
+# pavo-bootstrap-aws/observability/manifests/sanitizer.yaml.tftpl (the amenity KubernetesManifest) via a
+# reviewable PR. A customer-VPC image should have a human gate on ADOPTION, not
+# auto-deploy on every push. The trigger keeps a fresh signed image available.
+#
+# NOTE (source scan): like zitadel-provisioner, the source scan/SBOM steps are
+# omitted. The image scan + image-level CycloneDX/vuln attestations already
+# satisfy the gate and the policy; the sanitizer is stdlib-only (no deps).
+#
+# NOTE (arch): the sanitizer Dockerfile pins `FROM --platform=linux/amd64`
+# (EKS nodes are amd64; an arm64 build crash-loops with "exec format error"),
+# so a normal Cloud Build (amd64 host) produces the correct arch. If a target
+# node pool is ever arm64/Graviton, switch to a buildx multi-arch build.
+#
+# Verify signer identity post-build:
+#   cosign verify ghcr.io/pavoai/pavo-alert-sanitizer@sha256:... \
+#     --certificate-identity cloud-build-alert-sanitizer@onboarding-455713.iam.gserviceaccount.com \
+#     --certificate-oidc-issuer https://accounts.google.com
+
+# The signing/scanning toolchain image, pinned by digest. Defined once here and
+# referenced as $_CI_SECURITY_TOOLS_IMAGE in every step below, so rotating it is
+# a single-line change (no lockstep edits across 6 steps).
+substitutions:
+  _CI_SECURITY_TOOLS_IMAGE: 'us-docker.pkg.dev/onboarding-455713/ci-security/ci-security-tools@sha256:8001ff781f1c9de40bf551dae91ee8224ca509646ae2302a95d366e74cf353e0'
+
+steps:
+  # ============================================================================
+  # Build the sanitizer image. Context = pavo-bootstrap-aws/observability/sanitizer (Dockerfile +
+  # app.py only — stdlib service, no repo-wide context needed). The Dockerfile's
+  # `FROM --platform=linux/amd64` pins the arch regardless of host.
+  # ============================================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    args:
+      - 'build'
+      - '-f'
+      - 'pavo-bootstrap-aws/observability/sanitizer/Dockerfile'
+      - '-t'
+      - 'alert-sanitizer:$SHORT_SHA'
+      - 'pavo-bootstrap-aws/observability/sanitizer'
+
+  # ============================================================================
+  # Lint .trivyignore.yaml (Pavo policy: every entry needs statement + expired_at
+  # + a scope selector). Same policy + linter as the app repos / zitadel.
+  # ============================================================================
+  - name: '$_CI_SECURITY_TOOLS_IMAGE'
+    id: 'lint-trivyignore'
+    entrypoint: '/bin/bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        python3 - <<'PY'
+        import datetime, pathlib, sys, yaml
+
+        p = pathlib.Path('.trivyignore.yaml')
+        if not p.exists():
+            print(".trivyignore.yaml absent — nothing to lint.")
+            sys.exit(0)
+        doc = yaml.safe_load(p.read_text()) or {}
+        if not isinstance(doc, dict):
+            print("ERROR: .trivyignore.yaml root must be a YAML mapping"); sys.exit(1)
+        vulns = doc.get('vulnerabilities') or []
+        today = datetime.date.today()
+        errors = []
+        for i, v in enumerate(vulns):
+            if not isinstance(v, dict) or not v.get('id'):
+                errors.append(f"entry {i}: missing id"); continue
+            vid = v['id']
+            if not v.get('statement'):
+                errors.append(f"{vid}: missing statement")
+            exp = v.get('expired_at')
+            if not exp:
+                errors.append(f"{vid}: missing expired_at")
+            else:
+                try:
+                    d = exp if isinstance(exp, datetime.date) else datetime.date.fromisoformat(str(exp))
+                    if d < today:
+                        errors.append(f"{vid}: expired_at {exp} is in the past")
+                except ValueError:
+                    errors.append(f"{vid}: expired_at '{exp}' not YYYY-MM-DD")
+            if not (v.get('paths') or v.get('purls') or v.get('scope') == 'global'):
+                errors.append(f"{vid}: needs a scope (paths | purls | scope: global)")
+        if errors:
+            print("ERROR: .trivyignore.yaml policy violations:")
+            for e in errors:
+                print(f"  - {e}")
+            sys.exit(1)
+        print(f".trivyignore.yaml OK ({len(vulns)} entr{'y' if len(vulns)==1 else 'ies'}).")
+        PY
+
+  # ============================================================================
+  # Block release on FIXABLE HIGH/CRITICAL CVEs in the built image. Runs BEFORE
+  # push, so a failing scan never leaves an orphan vulnerable artefact in GHCR.
+  # ============================================================================
+  - name: '$_CI_SECURITY_TOOLS_IMAGE'
+    id: 'scan-image-blocking'
+    waitFor: ['build', 'lint-trivyignore']
+    entrypoint: '/bin/bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        export TRIVY_CACHE_DIR="$$(mktemp -d /tmp/trivy-cache.XXXXXX)"
+        trap 'rm -rf "$$TRIVY_CACHE_DIR"' EXIT
+        echo "=== Scanning alert-sanitizer:$SHORT_SHA ==="
+        # CVE-only, fixable HIGH/CRITICAL. Unfixed findings still land in the
+        # cosign-vuln attestation below.
+        bash scripts/trivy-with-cache.sh image \
+          --scanners vuln \
+          --severity HIGH,CRITICAL \
+          --exit-code 1 \
+          --ignore-unfixed \
+          --ignorefile .trivyignore.yaml \
+          --no-progress \
+          "alert-sanitizer:$SHORT_SHA"
+
+  # ============================================================================
+  # Push to GHCR with the SHORT_SHA tag.
+  # ============================================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-ghcr'
+    waitFor: ['scan-image-blocking']
+    secretEnv: ['GHCR_PAT']
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        GHCR="ghcr.io/pavoai/pavo-alert-sanitizer"
+        echo "$$GHCR_PAT" | docker login ghcr.io -u pavoai --password-stdin
+        docker tag "alert-sanitizer:$SHORT_SHA" "$${GHCR}:$SHORT_SHA"
+        docker push "$${GHCR}:$SHORT_SHA"
+        echo "✓ Pushed $${GHCR}:$SHORT_SHA"
+
+  # ============================================================================
+  # Resolve the canonical registry digest (crane, not the local daemon) so the
+  # sign/attest/verify steps all reference the exact same immutable digest.
+  # ============================================================================
+  - name: '$_CI_SECURITY_TOOLS_IMAGE'
+    id: 'capture-digest'
+    waitFor: ['push-ghcr']
+    secretEnv: ['GHCR_PAT']
+    entrypoint: '/bin/bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        echo "$$GHCR_PAT" | crane auth login ghcr.io -u pavoai --password-stdin
+        mkdir -p /workspace/digests
+        GHCR="ghcr.io/pavoai/pavo-alert-sanitizer"
+        DIGEST=$(crane digest "$${GHCR}:$SHORT_SHA")
+        echo "$${GHCR}@$${DIGEST}" > /workspace/digests/alert-sanitizer.ref
+        echo "Captured: $${GHCR}@$${DIGEST}"
+
+  # ============================================================================
+  # Produce the image CycloneDX SBOM + cosign-vuln predicate (all severities) —
+  # the two predicates the ClusterImagePolicy requires as attestations.
+  # ============================================================================
+  - name: '$_CI_SECURITY_TOOLS_IMAGE'
+    id: 'produce-sbom-and-scan-report'
+    waitFor: ['capture-digest']
+    secretEnv: ['GHCR_PAT']
+    entrypoint: '/bin/bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        export TRIVY_CACHE_DIR="$$(mktemp -d /tmp/trivy-cache.XXXXXX)"
+        trap 'rm -rf "$$TRIVY_CACHE_DIR"' EXIT
+        mkdir -p /workspace/sboms /workspace/scans
+        export TRIVY_USERNAME=pavoai
+        export TRIVY_PASSWORD="$$GHCR_PAT"
+        IMAGE_REF=$(cat /workspace/digests/alert-sanitizer.ref)
+
+        echo "=== CycloneDX SBOM for $$IMAGE_REF ==="
+        bash scripts/trivy-with-cache.sh image --format cyclonedx \
+          --output /workspace/sboms/alert-sanitizer.cdx.json "$$IMAGE_REF"
+
+        echo "=== Cosign-vuln predicate for $$IMAGE_REF ==="
+        bash scripts/trivy-with-cache.sh image --format cosign-vuln \
+          --output /workspace/scans/alert-sanitizer.cosign-vuln.json "$$IMAGE_REF"
+
+  # ============================================================================
+  # cosign keyless sign the digest + attach the two required attestations
+  # (CycloneDX SBOM, cosign-vuln). OIDC token minted explicitly from the
+  # metadata server (audience=sigstore) so a missing OpenIdTokenCreator binding
+  # surfaces as a clear 403 rather than an opaque cosign error.
+  # ============================================================================
+  - name: '$_CI_SECURITY_TOOLS_IMAGE'
+    id: 'sign-and-attest'
+    waitFor: ['produce-sbom-and-scan-report']
+    secretEnv: ['GHCR_PAT']
+    entrypoint: '/bin/bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        echo "$$GHCR_PAT" | cosign login ghcr.io -u pavoai --password-stdin
+        export COSIGN_YES=true
+
+        get_sigstore_token() {
+          curl -fsS -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=sigstore&format=full"
+        }
+
+        IMAGE_REF=$(cat /workspace/digests/alert-sanitizer.ref)
+
+        echo "=== Signing $$IMAGE_REF ==="
+        cosign sign --yes --identity-token "$$(get_sigstore_token)" "$$IMAGE_REF"
+
+        echo "=== Attaching CycloneDX SBOM attestation ==="
+        cosign attest --yes --identity-token "$$(get_sigstore_token)" \
+          --predicate /workspace/sboms/alert-sanitizer.cdx.json \
+          --type cyclonedx "$$IMAGE_REF"
+
+        echo "=== Attaching cosign-vuln attestation ==="
+        cosign attest --yes --identity-token "$$(get_sigstore_token)" \
+          --predicate /workspace/scans/alert-sanitizer.cosign-vuln.json \
+          --type vuln "$$IMAGE_REF"
+
+  # ============================================================================
+  # Drift guard: verify the signature was produced by the expected per-service
+  # signer SA. Catches a trigger-SA misconfiguration here (loud, in CI) rather
+  # than later at admission (silent until a self_hosted apply fails).
+  # ============================================================================
+  - name: '$_CI_SECURITY_TOOLS_IMAGE'
+    id: 'verify-signature'
+    waitFor: ['sign-and-attest']
+    secretEnv: ['GHCR_PAT']
+    entrypoint: '/bin/bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        echo "$$GHCR_PAT" | cosign login ghcr.io -u pavoai --password-stdin
+        IMAGE_REF=$(cat /workspace/digests/alert-sanitizer.ref)
+        EXPECTED_ID="cloud-build-alert-sanitizer@onboarding-455713.iam.gserviceaccount.com"
+        EXPECTED_ISS="https://accounts.google.com"
+        echo "=== cosign verify $$IMAGE_REF ==="
+        cosign verify "$$IMAGE_REF" \
+          --certificate-identity "$$EXPECTED_ID" \
+          --certificate-oidc-issuer "$$EXPECTED_ISS" > /dev/null
+        echo ""
+        echo "=================================================================="
+        echo "SIGNED + ATTESTED (verified under $$EXPECTED_ID):"
+        echo "  $$IMAGE_REF"
+        echo ""
+        echo "PIN in pavo-bootstrap-aws/observability/manifests/sanitizer.yaml.tftpl (container image):"
+        echo "  \"$$IMAGE_REF\""
+        echo "=================================================================="
+
+timeout: '1800s'
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+  env:
+    - 'DOCKER_BUILDKIT=1'
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/onboarding-455713/secrets/ghcr-pat/versions/latest
+      env: 'GHCR_PAT'
