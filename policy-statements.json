@@ -15,7 +15,10 @@
       "ec2:DescribeVpcAttribute",
       "ec2:DescribeSubnets",
       "ec2:DescribeSecurityGroups",
-      "ec2:DescribeAvailabilityZones"
+      "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeVpcEndpoints",
+      "ec2:DescribeVpcEndpointServices",
+      "ec2:DescribeNetworkInterfaces"
     ],
     "resources": ["*"]
   },
@@ -129,11 +132,16 @@
       "iam:DetachRolePolicy",
       "iam:ListAttachedRolePolicies",
       "iam:ListRolePolicies",
+      "iam:ListInstanceProfilesForRole",
+      "iam:ListRoleTags",
       "iam:UpdateAssumeRolePolicy",
       "iam:TagRole",
       "iam:UntagRole"
     ],
-    "resources": ["arn:aws:iam::*:role/pavo-*"]
+    "resources": [
+      "arn:aws:iam::*:role/pavo-*",
+      "arn:aws:iam::*:role/keda-*"
+    ]
   },
   {
     "sid": "IAMCreateRolesOnlyWithBoundary",
@@ -142,7 +150,10 @@
       "iam:CreateRole",
       "iam:PutRolePermissionsBoundary"
     ],
-    "resources": ["arn:aws:iam::*:role/pavo-*"],
+    "resources": [
+      "arn:aws:iam::*:role/pavo-*",
+      "arn:aws:iam::*:role/keda-*"
+    ],
     "conditions": {
       "ArnLike": {
         "iam:PermissionsBoundary": "arn:aws:iam::*:policy/pavo-permission-boundary-*"
@@ -153,7 +164,10 @@
     "sid": "DenyCreateRoleWithoutBoundary",
     "effect": "Deny",
     "actions": ["iam:CreateRole"],
-    "resources": ["arn:aws:iam::*:role/pavo-*"],
+    "resources": [
+      "arn:aws:iam::*:role/pavo-*",
+      "arn:aws:iam::*:role/keda-*"
+    ],
     "conditions": {
       "Null": {
         "iam:PermissionsBoundary": "true"
@@ -249,6 +263,42 @@
     }
   },
   {
+    "sid": "EC2CreateSecurityGroupInVpc",
+    "effect": "Allow",
+    "actions": ["ec2:CreateSecurityGroup"],
+    "resources": ["arn:aws:ec2:*:*:vpc/*"]
+  },
+  {
+    "sid": "EC2VpcEndpointMutations",
+    "effect": "Allow",
+    "actions": [
+      "ec2:CreateVpcEndpoint",
+      "ec2:ModifyVpcEndpoint",
+      "ec2:DeleteVpcEndpoints"
+    ],
+    "resources": [
+      "arn:aws:ec2:*:*:vpc-endpoint/*",
+      "arn:aws:ec2:*:*:vpc/*",
+      "arn:aws:ec2:*:*:subnet/*",
+      "arn:aws:ec2:*:*:security-group/*",
+      "arn:aws:ec2:*:*:route-table/*"
+    ]
+  },
+  {
+    "sid": "EC2NetworkInterfaceForMountTargetsAndEndpoints",
+    "effect": "Allow",
+    "actions": [
+      "ec2:CreateNetworkInterface",
+      "ec2:DeleteNetworkInterface",
+      "ec2:ModifyNetworkInterfaceAttribute"
+    ],
+    "resources": [
+      "arn:aws:ec2:*:*:network-interface/*",
+      "arn:aws:ec2:*:*:subnet/*",
+      "arn:aws:ec2:*:*:security-group/*"
+    ]
+  },
+  {
     "sid": "EC2SecurityGroupMutationsTaggedPavo",
     "effect": "Allow",
     "actions": [
@@ -266,7 +316,7 @@
     }
   },
   {
-    "sid": "EC2TagWritesOnSecurityGroupsOnly",
+    "sid": "EC2TagWritesScopedResources",
     "effect": "Allow",
     "actions": [
       "ec2:CreateTags",
@@ -274,7 +324,9 @@
     ],
     "resources": [
       "arn:aws:ec2:*:*:security-group/*",
-      "arn:aws:ec2:*:*:security-group-rule/*"
+      "arn:aws:ec2:*:*:security-group-rule/*",
+      "arn:aws:ec2:*:*:vpc-endpoint/*",
+      "arn:aws:ec2:*:*:network-interface/*"
     ]
   },
   {
