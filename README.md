@@ -367,7 +367,50 @@ applies `managed_by=pavo` to every EFS file system on creation.
 ## Configuring Terraform state (REQUIRED)
 
 **Do not run with local state.** Before running `terraform init`, you MUST
-create a `backend.tf` file (gitignored) with your chosen backend. Two patterns:
+point this module at a remote S3 backend.
+
+### Quick setup (recommended): `scripts/create-state-backend.sh`
+
+One state backend per AWS account (all cells in the account share it, keyed per
+cell). Create it once per account with the helper — it's **idempotent** (adopts
+an existing bucket/table and re-asserts hygiene), derives everything from the
+caller's account ID, and prints the per-cell backend config:
+
+```bash
+AWS_PROFILE=<account-profile> ./scripts/create-state-backend.sh [region]   # region defaults to us-east-1
+```
+
+It creates (naming convention — do not hand-name):
+
+| Resource | Name | Notes |
+|---|---|---|
+| S3 bucket | `pavo-tf-state-<account-id>` | versioned, AES256, public-access-blocked |
+| DynamoDB lock table | `pavo-tf-state-locks` | `LockID` hash key, on-demand |
+| State key (per cell) | `pavo-bootstrap-aws/<cluster>/terraform.tfstate` | |
+
+Then commit a per-cell backend file and init against it (this is what the
+committed `cells/<cluster>/backend.s3.tfbackend` files are — e.g.
+`cells/hc-fmnwao4ct/`):
+
+```hcl
+# cells/<cluster>/backend.s3.tfbackend
+bucket         = "pavo-tf-state-<account-id>"
+key            = "pavo-bootstrap-aws/<cluster>/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "pavo-tf-state-locks"
+encrypt        = true
+```
+
+```bash
+# backend.tf (gitignored) — the empty block the partial config fills in:
+#   terraform { backend "s3" {} }
+terraform init -backend-config=cells/<cluster>/backend.s3.tfbackend
+```
+
+### Manual alternatives
+
+If you're not using the helper (e.g. an existing corporate backend), create a
+gitignored `backend.tf` yourself. Two patterns:
 
 ### A. Partial config + `-backend-config` flags
 
@@ -558,6 +601,34 @@ aws eks delete-access-entry \
 ```
 
 ## Setting up the CMK (separate from bootstrap; before workload deploys)
+
+One CMK per cell encrypts **everything** — RDS storage, the RDS-managed master
+secret, and (on self-hosted cells) the ES / in-VPC-observability EBS volumes.
+Its ARN is the instance `cell_kms_key_arn` apiParameter. There are two cases:
+
+### Quick setup: same-account key (dev/test, e.g. `awstest`) — `scripts/create-cmk.sh`
+
+When the workload + ESO roles live in the **same account** as the key, a plain
+key with the **default policy (root → `kms:*`)** is sufficient: those roles get
+key use from their own IAM policies, so **no key-policy statements are needed**.
+Create it with the idempotent helper (adopts an existing `alias/pavo-<name>`):
+
+```bash
+AWS_PROFILE=<account-profile> ./scripts/create-cmk.sh <cell-or-customer-name> [region]
+# prints the key ARN + alias ARN — use either as cell_kms_key_arn
+```
+
+That's the whole CMK step for a same-account cell. **Skip the locked-down flow
+below** — it applies only to a customer key that does not delegate to root.
+
+### Explicit key policy (customer-governed keys)
+
+Use this when key access must be granted by the **key policy itself** — naming
+the workload + ESO roles — rather than left to account-root + IAM (e.g. an org
+that gates KMS at the key policy, or a key whose principals you want pinned
+regardless of IAM). The 5-statement policy below keeps `EnableRootPermissions`
+(root → `kms:*`) so the account never loses the recovery path, and **adds** the
+explicit workload/ESO grants on top:
 
 1. **First**, run `terraform apply` for this module and capture the ESO role
    ARN:
