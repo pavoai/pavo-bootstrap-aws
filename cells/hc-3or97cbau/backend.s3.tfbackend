@@ -1,0 +1,9 @@
+# Partial S3 backend config for the awsmultitenanttest cell (hc-3or97cbau),
+# Multi-Tenant AWS account 979214967625.
+# Usage: terraform init -backend-config=cells/hc-3or97cbau/backend.s3.tfbackend
+# Requires a `terraform { backend "s3" {} }` block present at init time.
+bucket         = "pavo-tf-state-979214967625"
+key            = "pavo-bootstrap-aws/hc-3or97cbau/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "pavo-tf-state-locks"
+encrypt        = true
