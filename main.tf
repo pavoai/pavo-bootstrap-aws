@@ -16,6 +16,19 @@ locals {
   boundary_statements = [
     for s in local.policy_statements : s if lookup(s, "scope", "shared") != "runner"
   ]
+
+  # The bootstrap operators (ESO, ECK, policy-controller, reloader) are cluster
+  # infrastructure, not tenant workloads — the same category as CoreDNS, the
+  # cluster-autoscaler, and the CSI drivers, which all tolerate CriticalAddonsOnly
+  # and run on the system/critical node pool. Give our operators the same
+  # toleration so they schedule on a BRAND-NEW cell that has only the system pool:
+  # tenant workload nodes are created lazily by Omnistrate when an instance
+  # deploys, but ECK must be up first (it publishes eck_ready, which gates the
+  # first self-hosted-ES instance) — a circular dependency without this. Tenant
+  # app + ES *data* pods deliberately do NOT get this toleration, so they still
+  # schedule on workload nodes. Matches Omnistrate's own critical add-ons
+  # (verified: coredns tolerates {key=CriticalAddonsOnly, operator=Exists}).
+  critical_addon_toleration = [{ key = "CriticalAddonsOnly", operator = "Exists" }]
 }
 
 data "aws_iam_policy_document" "pavo_permission_boundary" {
@@ -312,6 +325,14 @@ resource "helm_release" "external_secrets" {
     value = aws_iam_role.pavo_eso.arn
   }
 
+  # Tolerate CriticalAddonsOnly on all three ESO deployments (controller,
+  # webhook, cert-controller) — see local.critical_addon_toleration.
+  values = [yamlencode({
+    tolerations    = local.critical_addon_toleration
+    webhook        = { tolerations = local.critical_addon_toleration }
+    certController = { tolerations = local.critical_addon_toleration }
+  })]
+
   depends_on = [
     aws_ssm_parameter.single_cell_guard,
     time_sleep.wait_for_eks_access,
@@ -342,6 +363,12 @@ resource "helm_release" "eck_operator" {
   repository       = "https://helm.elastic.co"
   chart            = "eck-operator"
   version          = var.eck_operator_chart_version
+
+  # Tolerate CriticalAddonsOnly so the operator can run on the system pool of a
+  # fresh cell (no tenant workload nodes yet) — see local.critical_addon_toleration.
+  values = [yamlencode({
+    tolerations = local.critical_addon_toleration
+  })]
 
   # wait=true (default) blocks until the operator StatefulSet is rolled out, so
   # eck_ready below is only published once the operator is actually up.
@@ -383,6 +410,12 @@ resource "helm_release" "stakater_reloader" {
     name  = "reloader.watchGlobally"
     value = "true"
   }
+
+  # Tolerate CriticalAddonsOnly so reloader runs on the system pool of a fresh
+  # cell — see local.critical_addon_toleration.
+  values = [yamlencode({
+    reloader = { deployment = { tolerations = local.critical_addon_toleration } }
+  })]
 
   depends_on = [
     aws_ssm_parameter.single_cell_guard,
@@ -544,6 +577,10 @@ resource "helm_release" "policy_controller" {
   # ClusterImagePolicies below; everything else admits unchanged.
   values = [
     yamlencode({
+      # commonTolerations applies to all policy-controller pods — tolerate
+      # CriticalAddonsOnly so they run on the system pool of a fresh cell (see
+      # local.critical_addon_toleration).
+      commonTolerations = local.critical_addon_toleration
       webhook = {
         replicaCount = 2
         configData = {

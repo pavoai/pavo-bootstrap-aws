@@ -106,17 +106,12 @@ things** because the EBS CSI driver's role must be allowed to use your key:
    ```
    The managed EBS-CSI role's KMS permissions are scoped to keys carrying this
    tag (so the driver can only use keys you've explicitly opted in).
-2. **Re-run the Omnistrate account-config CloudFormation** so the managed
-   EBS-CSI driver role picks up the KMS actions (`kms:CreateGrant` + the crypto
-   set, scoped via `kms:ViaService = ec2.<region>.amazonaws.com` and the
-   `omnistrate.com/customer-managed-kms` tag). In the Omnistrate portal:
-   **Operations Center → BYOC Cloud Accounts → your account → open the provided
-   CloudFormation link**, then **Update** the existing `AccountConfigSetup`
-   stack (Replace template → the `…/onboarding-cfv1/account-config-setup-template-scoped-permissions.yaml`
-   URL → keep existing parameters → acknowledge IAM capabilities). After
-   `UPDATE_COMPLETE`, Omnistrate reconciles the KMS permissions onto the driver
-   role. `CreateGrant` is the action the driver needs to hand the grant to EBS
-   at attach time.
+2. **Reconcile the account's `AccountConfigSetup` stack** so the managed EBS-CSI
+   driver role picks up the KMS actions (`kms:CreateGrant` + the crypto set,
+   scoped via `kms:ViaService = ec2.<region>.amazonaws.com` and the
+   `omnistrate.com/customer-managed-kms` tag). This is the same stack update
+   described in *Reconciling an already-onboarded account* below — `CreateGrant`
+   is the action the driver needs to hand the grant to EBS at attach time.
 3. **Only for locked-down keys** — if your key policy does **not** delegate to the
    account root, add a key-policy statement naming the **Omnistrate-managed
    EBS-CSI driver role** with the same KMS actions. If the key policy delegates
@@ -318,17 +313,47 @@ The script uses `aws iam simulate-custom-policy` with the boundary fed through
 so the simulation reflects how the boundary actually behaves in production
 (capping the identity policy, not acting as one). It tests ~20 cases including:
 
-- RDS / ElastiCache / EFS read-only on `*` → allowed
-- RDS / ElastiCache mutations on `pavo-*` ARNs → allowed
-- RDS / ElastiCache mutations on non-`pavo-*` ARNs → denied
-- EFS `CreateFileSystem` with `aws:RequestTag/managed_by=pavo` → allowed
-- EFS `CreateFileSystem` without the request tag → denied
-- EFS mutations with `aws:ResourceTag/managed_by=pavo` → allowed
-- EFS mutations without the resource tag → denied
-- S3 / SQS sanity (existing scopings still work)
+- RDS / ElastiCache / EFS read-only on `*` → allowed (shared `ReadOnlyDescribeList`)
+- Provisioning mutations (`rds:*`, `elasticache:Modify*/Delete*`, `elasticfilesystem:*`,
+  `iam:CreateRole`, EC2 network, `kms:CreateGrant`) → **denied** — they're
+  `scope: runner` (see *Resource scopes*), excluded from the workload boundary
+- `elasticache:Connect` on `pavo-*` → allowed (the one ElastiCache action a
+  workload role actually uses)
+- S3 / SQS / SNS on `pavo-*` → allowed; on non-`pavo-*` → denied
 
 Any caller with `iam:SimulateCustomPolicy` permission works — the simulation is
 account-agnostic.
+
+### Reconciling an already-onboarded account (policy changes don't auto-propagate)
+
+Editing `policy-statements.json` and releasing a new service version updates the
+**source** only. An account onboarded *before* the change keeps running the
+**old** custom-terraform role policy until its `AccountConfigSetup` CloudFormation
+stack is reconciled — neither CI nor a published version pushes it.
+
+> **Symptom:** `pavoInfra` fails `AccessDenied` on an action that **is** present
+> in `policy-statements.json` — e.g. `ec2:DescribePrefixLists` (added when the
+> VPC interface endpoints gained a prefix-list dependency). The role's live
+> inline policy simply predates the change.
+
+Reconcile each affected account by updating its `AccountConfigSetup` stack to
+Omnistrate's latest onboarding template (the update just **modifies** the
+`omnistrate-custom-terraform-role-for-sm-*` role policies — no replacement):
+
+- **Portal:** Operations Center → BYOC Cloud Accounts → your account → open the
+  provided CloudFormation link → **Update** `AccountConfigSetup` (Replace template
+  → the `…/onboarding-cfv1/<org>/account-config-setup-template.yaml` URL → keep
+  existing parameters → acknowledge IAM capabilities) → `UPDATE_COMPLETE`.
+- **CLI** (reviewable — create a change set first, expect only `AWS::IAM::Role`
+  `Modify`): `create-change-set`/`execute-change-set` against the same template
+  URL, passing existing params as JSON (`{"ParameterKey":…,"UsePreviousValue":true}`
+  — the `key=,UsePreviousValue=true` shorthand mis-parses), with
+  `--capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND`.
+
+Get `<org>` + the exact template URL from the account config's `cloudformation_url`
+(`omnistrate-ctl instance describe <account-config-instance>`). **This is the same
+stack update** that refreshes the EBS-CSI KMS permissions for customer-CMK volumes
+(*Customer-managed-key EBS volumes* above) — one mechanism, several triggers.
 
 ### Migrating existing customers when boundary changes
 
@@ -553,6 +578,43 @@ Capture outputs (especially `eso_role_arn` — needed for the CMK key policy):
 ```bash
 terraform output
 ```
+
+## Brand-new cell: the workload-node / `eck_ready` ordering
+
+> The *other* brand-new-account gotcha — `pavoInfra` failing `AccessDenied` on a
+> policy action that's already in `policy-statements.json` — is a stale onboarded
+> role; see *Reconciling an already-onboarded account*.
+
+A freshly-provisioned Omnistrate cell has **only the system/critical node pool**
+(nodes tainted `CriticalAddonsOnly=true:NoSchedule`). The per-resource **tenant
+workload node pools are created lazily by Omnistrate when an *instance* deploys**
+— so on a cell where no instance has deployed yet, there are no untainted nodes.
+
+Without care this deadlocks a self-hosted-ES bring-up:
+
+> `es_mode=self_hosted` instance needs `eck_ready=true` → the cell publishes that
+> **only after the ECK operator is actually running** (`main.tf`, `depends_on =
+> [helm_release.eck_operator]`) → the operator needs a node → the only nodes are
+> tainted → the operator can't schedule → the instance never deploys → no
+> workload nodes are ever created.
+
+**This module breaks the cycle by design:** the bootstrap operators (ESO, ECK,
+policy-controller, reloader) are cluster infrastructure — the same category as
+CoreDNS, the cluster-autoscaler, and the CSI drivers, which all tolerate
+`CriticalAddonsOnly`. So they carry the same toleration
+(`local.critical_addon_toleration`) and **run on the system pool**. That lets ECK
+come up on a bare cell → `eck_ready=true` → the self-hosted instance deploys →
+its **app + ES data pods** (which deliberately do *not* have the toleration)
+trigger the workload-node scale-up and run there. No `es_mode` juggling, and
+`eck_ready` stays truthful.
+
+If you ever see the bootstrap helm releases stuck (`terraform apply` hanging on
+`helm_release.* Still creating…`), check for `Pending` operator pods with
+`FailedScheduling … untolerated taint(s)` — that means a chart's toleration value
+path is wrong for its version (they differ: ESO sets `tolerations` +
+`webhook.tolerations` + `certController.tolerations`; reloader uses
+`reloader.deployment.tolerations`; policy-controller uses `commonTolerations`;
+eck-operator uses top-level `tolerations`). Confirm with `helm show values`.
 
 ## Case B: bootstrapping without K8s admin
 
