@@ -18,7 +18,8 @@
       "ec2:DescribeAvailabilityZones",
       "ec2:DescribeVpcEndpoints",
       "ec2:DescribeVpcEndpointServices",
-      "ec2:DescribeNetworkInterfaces"
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribePrefixLists"
     ],
     "resources": ["*"]
   },
