@@ -38,7 +38,8 @@
     "actions": ["elasticache:*"],
     "resources": [
       "arn:aws:elasticache:*:*:replicationgroup:pavo-*",
-      "arn:aws:elasticache:*:*:subnetgroup:pavo-*"
+      "arn:aws:elasticache:*:*:subnetgroup:pavo-*",
+      "arn:aws:elasticache:*:*:parametergroup:default.redis7"
     ]
   },
   {

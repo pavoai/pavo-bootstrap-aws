@@ -256,6 +256,38 @@ The provisioning role also holds **no** Bedrock agreement / use-case actions, so
 accepting the Claude model-use agreement is a one-time customer onboarding step,
 not a Pavo permission (see `terraform-omnistrate-aws` → `bedrock_model_agreements`).
 
+### Least-privilege is non-negotiable (and customer-audited)
+
+Both artifacts are **scoped least-privilege**, always. The Terraform provisioning
+role's inline policy is generated from `policy-statements.json` — **never a broad
+managed policy like `AdministratorAccess`**. BYOC customers review and approve the
+exact IAM their account grants Omnistrate's runner, so a broad grant is both a
+real security regression and something a security-conscious customer *will* flag
+in review. (A per-model role once existed as an out-of-CloudFormation
+`AdministratorAccess` orphan — that is exactly the anti-pattern this guards
+against. It masked gaps in the scoped policy until it was reconciled away.)
+
+**Contract when adding an AWS resource to `terraform-omnistrate-aws`:** add its
+scoped grants to `policy-statements.json` in the same change. Watch for
+**resource-level authorization gotchas** — several *create* actions authorize
+against *more than* the named resource, so a `pavo-*` / tag scope alone returns
+`403`:
+
+- `ec2:CreateSecurityGroup` authorizes against the **VPC** the group lives in
+  (which carries no `managed_by` request tag), not just the security group — so
+  it needs an unconditional grant on `vpc/*` alongside the tagged one.
+- `elasticache:CreateReplicationGroup` authorizes against the **parameter group**
+  (`default.redis7`), not just the `pavo-*` replication group.
+- `ec2:CreateVpcEndpoint` and EFS mount targets authorize against the ENI +
+  subnet + security group + VPC.
+- `iam:CreateRole` for a fixed-name IRSA role (e.g. `keda-sqs-scaler`) won't match
+  a `role/pavo-*` scope — scope the IAM statements to the actual role names.
+
+When in doubt, run `scripts/simulate-policy.py` and check the AWS *Service
+Authorization Reference* for which resource types an action authorizes against. A
+failed apply under the scoped policy is the signal to **add the missing scoped
+grant — not** to widen to a managed policy.
+
 ### Verifying boundary edits locally
 
 After editing `policy-statements.json`, regenerate **both** derived artifacts and
