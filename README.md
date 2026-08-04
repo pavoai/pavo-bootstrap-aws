@@ -616,6 +616,26 @@ path is wrong for its version (they differ: ESO sets `tolerations` +
 `reloader.deployment.tolerations`; policy-controller uses `commonTolerations`;
 eck-operator uses top-level `tolerations`). Confirm with `helm show values`.
 
+### Where the tenant workload nodes come from
+
+Omnistrate provisions a **scale-from-zero node group per (resource × instance
+type)** from each resource's `compute.instanceTypes`; the cluster-autoscaler
+scales them on demand. Inspect/manage with
+`omctl deployment-cell list-nodepools|describe-nodepool|scale-up-nodepool|
+scale-down-nodepool|delete-nodepool --id <cell>` (there is **no** `create` — pools
+are platform-created). For **CUSTOM_TENANCY** (Helm) plans like ours they're
+created when the plan's **resources reconcile**, not up front.
+
+So a **truly fresh cell** (no instance ever deployed) has **zero workload pools**,
+only the tainted system pool. Fine for the bootstrap operators (they tolerate the
+taint, above), but it **deadlocks a self-hosted-ES first deploy**: `pavoInfra`'s
+own ES/init-db pods need a workload node, yet the pools that would supply one are
+created by the app resources — which only deploy *after* `pavoInfra` succeeds. A
+cell that has deployed before (e.g. `awstest`, pools built up over prior deploys)
+never hits this. Symptom: `pavoInfra` fails with tenant pods `Pending` /
+`NotTriggerScaleUp: untolerated taint(s)` and `list-nodepools` shows none.
+**Open with Omnistrate** — how a fresh CUSTOM_TENANCY cell seeds its first pool.
+
 ## Case B: bootstrapping without K8s admin
 
 If `scripts/preflight.sh` fails on the `kubectl auth can-i '*' '*' --all-namespaces`
@@ -661,6 +681,18 @@ aws eks delete-access-entry \
   --principal-arn "$MY_ROLE_ARN" \
   --region "$AWS_REGION"
 ```
+
+### Runner `Unauthorized` on the K8s API after a role recreate
+
+If the Omnistrate **runner** role is deleted and recreated with the same name
+(e.g. the scoped-policy reconcile that replaces an orphan `AdministratorAccess`
+role), its existing EKS access entry goes **stale** — EKS binds the entry to the
+role's unique ID, not just the ARN, so `describe-access-entry` still shows the
+right ARN but `pavoInfra`'s K8s reads fail with
+`Error: Unauthorized … the server has asked for the client to provide credentials`.
+**Re-seat** the runner's entry (the `create-access-entry` + `associate-access-policy`
+pair above, using `var.runner_role_arn` instead of your own): `delete-access-entry`
+→ `create-access-entry` → `associate-access-policy` (`AmazonEKSClusterAdminPolicy`).
 
 ## Setting up the CMK (separate from bootstrap; before workload deploys)
 
