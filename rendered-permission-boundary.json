@@ -28,18 +28,6 @@
       ]
     },
     {
-      "Sid": "RDSMutatingPavoResources",
-      "Effect": "Allow",
-      "Action": [
-        "rds:*"
-      ],
-      "Resource": [
-        "arn:aws:rds:*:*:db:pavo-*",
-        "arn:aws:rds:*:*:subgrp:pavo-*",
-        "arn:aws:rds:*:*:snapshot:pavo-*"
-      ]
-    },
-    {
       "Sid": "ElastiCacheMutatingPavoResources",
       "Effect": "Allow",
       "Action": [
@@ -83,54 +71,6 @@
       ]
     },
     {
-      "Sid": "EFSCreateFileSystemWithRequestTag",
-      "Effect": "Allow",
-      "Action": [
-        "elasticfilesystem:CreateFileSystem"
-      ],
-      "Resource": [
-        "*"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestTag/managed_by": "pavo"
-        }
-      }
-    },
-    {
-      "Sid": "EFSMutatingTaggedPavoResources",
-      "Effect": "Allow",
-      "Action": [
-        "elasticfilesystem:*"
-      ],
-      "Resource": [
-        "*"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "aws:ResourceTag/managed_by": "pavo"
-        }
-      }
-    },
-    {
-      "Sid": "EKSAccessAndDescribe",
-      "Effect": "Allow",
-      "Action": [
-        "eks:DescribeCluster",
-        "eks:CreateAccessEntry",
-        "eks:DescribeAccessEntry",
-        "eks:ListAccessEntries",
-        "eks:AssociateAccessPolicy",
-        "eks:DisassociateAccessPolicy",
-        "eks:ListAssociatedAccessPolicies",
-        "eks:AccessKubernetesApi"
-      ],
-      "Resource": [
-        "arn:aws:eks:*:*:cluster/*",
-        "arn:aws:eks:*:*:access-entry/*"
-      ]
-    },
-    {
       "Sid": "BedrockInvokeScopedToModels",
       "Effect": "Allow",
       "Action": [
@@ -144,49 +84,6 @@
         "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-6-v1",
         "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0"
       ]
-    },
-    {
-      "Sid": "IAMScopedToPavoNames",
-      "Effect": "Allow",
-      "Action": [
-        "iam:DeleteRole",
-        "iam:GetRole",
-        "iam:ListRoles",
-        "iam:PassRole",
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:GetRolePolicy",
-        "iam:AttachRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:ListAttachedRolePolicies",
-        "iam:ListRolePolicies",
-        "iam:ListInstanceProfilesForRole",
-        "iam:ListRoleTags",
-        "iam:UpdateAssumeRolePolicy",
-        "iam:TagRole",
-        "iam:UntagRole"
-      ],
-      "Resource": [
-        "arn:aws:iam::*:role/pavo-*",
-        "arn:aws:iam::*:role/keda-*"
-      ]
-    },
-    {
-      "Sid": "IAMCreateRolesOnlyWithBoundary",
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateRole",
-        "iam:PutRolePermissionsBoundary"
-      ],
-      "Resource": [
-        "arn:aws:iam::*:role/pavo-*",
-        "arn:aws:iam::*:role/keda-*"
-      ],
-      "Condition": {
-        "ArnLike": {
-          "iam:PermissionsBoundary": "arn:aws:iam::*:policy/pavo-permission-boundary-*"
-        }
-      }
     },
     {
       "Sid": "DenyCreateRoleWithoutBoundary",
@@ -215,40 +112,6 @@
       ]
     },
     {
-      "Sid": "ServiceLinkedRoleCreate",
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateServiceLinkedRole"
-      ],
-      "Resource": [
-        "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
-        "arn:aws:iam::*:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache*",
-        "arn:aws:iam::*:role/aws-service-role/elasticfilesystem.amazonaws.com/*"
-      ],
-      "Condition": {
-        "StringLike": {
-          "iam:AWSServiceName": [
-            "rds.amazonaws.com",
-            "elasticache.amazonaws.com",
-            "elasticfilesystem.amazonaws.com"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "ServiceLinkedRolePolicyAttach",
-      "Effect": "Allow",
-      "Action": [
-        "iam:AttachRolePolicy",
-        "iam:PutRolePolicy"
-      ],
-      "Resource": [
-        "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
-        "arn:aws:iam::*:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache*",
-        "arn:aws:iam::*:role/aws-service-role/elasticfilesystem.amazonaws.com/*"
-      ]
-    },
-    {
       "Sid": "SSMRead",
       "Effect": "Allow",
       "Action": [
@@ -261,32 +124,6 @@
       ]
     },
     {
-      "Sid": "SecretsManagerCreateRDSSecret",
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:CreateSecret"
-      ],
-      "Resource": [
-        "*"
-      ],
-      "Condition": {
-        "StringLike": {
-          "secretsmanager:Name": "rds!*"
-        }
-      }
-    },
-    {
-      "Sid": "SecretsManagerTagRDSSecret",
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:TagResource",
-        "secretsmanager:UntagResource"
-      ],
-      "Resource": [
-        "arn:aws:secretsmanager:*:*:secret:rds!*"
-      ]
-    },
-    {
       "Sid": "SecretsManagerScopedRead",
       "Effect": "Allow",
       "Action": [
@@ -295,94 +132,6 @@
       ],
       "Resource": [
         "arn:aws:secretsmanager:*:*:secret:rds!*"
-      ]
-    },
-    {
-      "Sid": "EC2CreateSecurityGroupWithRequestTag",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:CreateSecurityGroup"
-      ],
-      "Resource": [
-        "*"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestTag/managed_by": "pavo"
-        }
-      }
-    },
-    {
-      "Sid": "EC2CreateSecurityGroupInVpc",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:CreateSecurityGroup"
-      ],
-      "Resource": [
-        "arn:aws:ec2:*:*:vpc/*"
-      ]
-    },
-    {
-      "Sid": "EC2VpcEndpointMutations",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:CreateVpcEndpoint",
-        "ec2:ModifyVpcEndpoint",
-        "ec2:DeleteVpcEndpoints"
-      ],
-      "Resource": [
-        "arn:aws:ec2:*:*:vpc-endpoint/*",
-        "arn:aws:ec2:*:*:vpc/*",
-        "arn:aws:ec2:*:*:subnet/*",
-        "arn:aws:ec2:*:*:security-group/*",
-        "arn:aws:ec2:*:*:route-table/*"
-      ]
-    },
-    {
-      "Sid": "EC2NetworkInterfaceForMountTargetsAndEndpoints",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:CreateNetworkInterface",
-        "ec2:DeleteNetworkInterface",
-        "ec2:ModifyNetworkInterfaceAttribute"
-      ],
-      "Resource": [
-        "arn:aws:ec2:*:*:network-interface/*",
-        "arn:aws:ec2:*:*:subnet/*",
-        "arn:aws:ec2:*:*:security-group/*"
-      ]
-    },
-    {
-      "Sid": "EC2SecurityGroupMutationsTaggedPavo",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:DeleteSecurityGroup",
-        "ec2:AuthorizeSecurityGroupIngress",
-        "ec2:RevokeSecurityGroupIngress",
-        "ec2:AuthorizeSecurityGroupEgress",
-        "ec2:RevokeSecurityGroupEgress"
-      ],
-      "Resource": [
-        "*"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "aws:ResourceTag/managed_by": "pavo"
-        }
-      }
-    },
-    {
-      "Sid": "EC2TagWritesScopedResources",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:CreateTags",
-        "ec2:DeleteTags"
-      ],
-      "Resource": [
-        "arn:aws:ec2:*:*:security-group/*",
-        "arn:aws:ec2:*:*:security-group-rule/*",
-        "arn:aws:ec2:*:*:vpc-endpoint/*",
-        "arn:aws:ec2:*:*:network-interface/*"
       ]
     },
     {
@@ -408,33 +157,6 @@
             "elasticfilesystem.*.amazonaws.com",
             "s3.*.amazonaws.com"
           ]
-        }
-      }
-    },
-    {
-      "Sid": "KMSDescribeCustomerKeyDirect",
-      "Effect": "Allow",
-      "Action": [
-        "kms:DescribeKey"
-      ],
-      "Resource": [
-        "*"
-      ]
-    },
-    {
-      "Sid": "KMSGrantsForAWSResources",
-      "Effect": "Allow",
-      "Action": [
-        "kms:CreateGrant",
-        "kms:ListGrants",
-        "kms:RevokeGrant"
-      ],
-      "Resource": [
-        "*"
-      ],
-      "Condition": {
-        "Bool": {
-          "kms:GrantIsForAWSResource": "true"
         }
       }
     }

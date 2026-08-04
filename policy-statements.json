@@ -25,6 +25,7 @@
   },
   {
     "sid": "RDSMutatingPavoResources",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["rds:*"],
     "resources": [
@@ -66,6 +67,7 @@
   },
   {
     "sid": "EFSCreateFileSystemWithRequestTag",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["elasticfilesystem:CreateFileSystem"],
     "resources": ["*"],
@@ -77,6 +79,7 @@
   },
   {
     "sid": "EFSMutatingTaggedPavoResources",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["elasticfilesystem:*"],
     "resources": ["*"],
@@ -88,6 +91,7 @@
   },
   {
     "sid": "EKSAccessAndDescribe",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "eks:DescribeCluster",
@@ -106,6 +110,7 @@
   },
   {
     "sid": "BedrockInvokeScopedToModels",
+    "scope": "boundary",
     "effect": "Allow",
     "actions": [
       "bedrock:InvokeModel",
@@ -121,6 +126,7 @@
   },
   {
     "sid": "IAMScopedToPavoNames",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "iam:DeleteRole",
@@ -147,6 +153,7 @@
   },
   {
     "sid": "IAMCreateRolesOnlyWithBoundary",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "iam:CreateRole",
@@ -184,6 +191,7 @@
   },
   {
     "sid": "ServiceLinkedRoleCreate",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["iam:CreateServiceLinkedRole"],
     "resources": [
@@ -203,6 +211,7 @@
   },
   {
     "sid": "ServiceLinkedRolePolicyAttach",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "iam:AttachRolePolicy",
@@ -226,6 +235,7 @@
   },
   {
     "sid": "SecretsManagerCreateRDSSecret",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["secretsmanager:CreateSecret"],
     "resources": ["*"],
@@ -237,6 +247,7 @@
   },
   {
     "sid": "SecretsManagerTagRDSSecret",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "secretsmanager:TagResource",
@@ -255,6 +266,7 @@
   },
   {
     "sid": "EC2CreateSecurityGroupWithRequestTag",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["ec2:CreateSecurityGroup"],
     "resources": ["*"],
@@ -266,12 +278,14 @@
   },
   {
     "sid": "EC2CreateSecurityGroupInVpc",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["ec2:CreateSecurityGroup"],
     "resources": ["arn:aws:ec2:*:*:vpc/*"]
   },
   {
     "sid": "EC2VpcEndpointMutations",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "ec2:CreateVpcEndpoint",
@@ -288,6 +302,7 @@
   },
   {
     "sid": "EC2NetworkInterfaceForMountTargetsAndEndpoints",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "ec2:CreateNetworkInterface",
@@ -302,6 +317,7 @@
   },
   {
     "sid": "EC2SecurityGroupMutationsTaggedPavo",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "ec2:DeleteSecurityGroup",
@@ -319,6 +335,7 @@
   },
   {
     "sid": "EC2TagWritesScopedResources",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "ec2:CreateTags",
@@ -357,12 +374,14 @@
   },
   {
     "sid": "KMSDescribeCustomerKeyDirect",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["kms:DescribeKey"],
     "resources": ["*"]
   },
   {
     "sid": "KMSGrantsForAWSResources",
+    "scope": "runner",
     "effect": "Allow",
     "actions": [
       "kms:CreateGrant",

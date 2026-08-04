@@ -6,11 +6,21 @@ data "aws_caller_identity" "current" {}
 # ============================================================================
 locals {
   policy_statements = jsondecode(file("${path.module}/policy-statements.json"))
+
+  # The workload permission boundary caps only pavo-*/keda-* workload roles
+  # (app IRSA, ESO, es-snapshots, zitadel-prov, keda-sqs). It must NOT carry the
+  # provisioning-runner-only statements (scope="runner") — no bounded role uses
+  # them, and including them blew the boundary past the 6144 IAM policy-size cap.
+  # scope="runner" → runner policy only (spec CUSTOM_TERRAFORM_POLICY); the
+  # runner role is not bounded by this boundary. Absent scope = shared (both).
+  boundary_statements = [
+    for s in local.policy_statements : s if lookup(s, "scope", "shared") != "runner"
+  ]
 }
 
 data "aws_iam_policy_document" "pavo_permission_boundary" {
   dynamic "statement" {
-    for_each = local.policy_statements
+    for_each = local.boundary_statements
     content {
       sid       = statement.value.sid
       effect    = statement.value.effect
@@ -47,6 +57,20 @@ resource "aws_iam_policy" "pavo_permission_boundary" {
   policy      = data.aws_iam_policy_document.pavo_permission_boundary.json
 
   depends_on = [aws_ssm_parameter.single_cell_guard]
+
+  lifecycle {
+    # Fail-closed on an unsupported "scope": a typo (e.g. "runer") must NOT
+    # silently route a statement into the wrong policy. Allowed values:
+    # shared | runner | boundary (absent = shared). Mirrored in
+    # scripts/render-policy.sh and scripts/sync-policy-to-spec.py.
+    precondition {
+      condition = alltrue([
+        for s in local.policy_statements :
+        contains(["shared", "runner", "boundary"], lookup(s, "scope", "shared"))
+      ])
+      error_message = "policy-statements.json: every statement's \"scope\" must be one of shared|runner|boundary (absent = shared)."
+    }
+  }
 }
 
 # ============================================================================
