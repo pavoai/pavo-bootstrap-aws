@@ -25,6 +25,17 @@ set -euo pipefail
 
 NAME="${1:?usage: create-cmk.sh <cell-or-customer-name> [region]}"
 REGION="${2:-us-east-1}"
+
+# Allow only the safe alias character set before NAME is embedded anywhere. It
+# goes into a JMESPath AliasName filter (list-aliases) and the alias name itself;
+# a quote or JMESPath operator could otherwise inject an extra predicate and make
+# KEY_ID resolve to an unintended CMK, which tag-resource would then tag.
+case "${NAME}" in
+  ""|*[!a-zA-Z0-9._-]*)
+    echo "[FAIL] invalid name '${NAME}': use only letters, digits, dot, underscore, hyphen" >&2
+    exit 1 ;;
+esac
+
 ALIAS="alias/pavo-${NAME}"
 
 command -v aws >/dev/null 2>&1 || { echo "[FAIL] aws CLI not found" >&2; exit 1; }
@@ -54,6 +65,17 @@ else
   aws kms create-alias --region "${REGION}" --alias-name "${ALIAS}" --target-key-id "${KEY_ID}"
   ACTION="created"
 fi
+
+# Tag the key so Omnistrate's EBS CSI driver is allowed to use it. On self-hosted
+# cells the driver encrypts the Elasticsearch / in-VPC-observability EBS volumes
+# with this CMK, and its IAM role scopes kms:CreateGrant (+ crypto) to keys tagged
+# omnistrate.com/customer-managed-kms=true. WITHOUT this tag CreateGrant is denied:
+# each encrypted volume is created and then deleted seconds later, so the volume
+# claim (e.g. the ES data PVC) hangs Pending forever and provisioning stalls.
+# Run unconditionally so the adopt-existing path back-tags older keys too;
+# tag-resource is idempotent.
+aws kms tag-resource --region "${REGION}" --key-id "${KEY_ID}" \
+  --tags TagKey=omnistrate.com/customer-managed-kms,TagValue=true
 
 # Resolve the canonical, partition-correct key ARN and confirm the key is usable
 # BEFORE reporting success (guards against an alias pointing at a disabled or
