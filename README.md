@@ -626,15 +626,31 @@ scale-down-nodepool|delete-nodepool --id <cell>` (there is **no** `create` — p
 are platform-created). For **CUSTOM_TENANCY** (Helm) plans like ours they're
 created when the plan's **resources reconcile**, not up front.
 
-So a **truly fresh cell** (no instance ever deployed) has **zero workload pools**,
-only the tainted system pool. Fine for the bootstrap operators (they tolerate the
-taint, above), but it **deadlocks a self-hosted-ES first deploy**: `pavoInfra`'s
-own ES/init-db pods need a workload node, yet the pools that would supply one are
-created by the app resources — which only deploy *after* `pavoInfra` succeeds. A
-cell that has deployed before (e.g. `awstest`, pools built up over prior deploys)
-never hits this. Symptom: `pavoInfra` fails with tenant pods `Pending` /
-`NotTriggerScaleUp: untolerated taint(s)` and `list-nodepools` shows none.
-**Open with Omnistrate** — how a fresh CUSTOM_TENANCY cell seeds its first pool.
+So a **truly fresh cell** (no instance ever deployed) starts with **zero workload
+pools**, only the tainted system pool. Fine for the bootstrap operators (they
+tolerate the taint, above), but it would **deadlock a self-hosted-ES first
+deploy**: `pavoInfra`'s own ES/init-db pods need a workload node, yet the pools
+that would supply one are created by app resources that only deploy *after*
+`pavoInfra` succeeds. A cell that has deployed before (e.g. `awstest`) already has
+pools from prior deploys and never hits this.
+
+**Resolved by the `pavo-compute-anchor` resource.** It declares `compute` with
+**no `dependsOn`**, so Omnistrate deploys it first and its pool supplies the
+initial untainted workload node before `pavoInfra` runs; `pavoInfra` and the app
+helms all depend on it. See
+[`charts/pavo-compute-anchor/README.md`](../charts/pavo-compute-anchor/README.md).
+
+> **Interim (per-helm compute).** The app helms (ingress-nginx, api-gateway,
+> intern, frontend, onboarding-copy, tribal-knowledge, capability-proxy) currently
+> each declare their **own** compute pool rather than sharing the anchor pool, to
+> work around an Omnistrate render-metadata race where a compute-less helm's
+> `RenderClusterParameters` runs before `pavoInfra`'s outputs are queryable and
+> fails. The anchor still exists to unblock `pavoInfra`'s own ES/init-db pods.
+> Once Omnistrate ships the fix, drop the per-helm `compute` blocks and the app
+> pods float back onto the single shared anchor pool (the lean target design).
+If a fresh deploy still fails with tenant pods `Pending` /
+`NotTriggerScaleUp: untolerated taint(s)` and `list-nodepools` shows none, the
+anchor didn't come up (check its resource first).
 
 ## Case B: bootstrapping without K8s admin
 
