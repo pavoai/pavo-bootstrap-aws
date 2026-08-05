@@ -712,6 +712,13 @@ AWS_PROFILE=<account-profile> ./scripts/create-cmk.sh <cell-or-customer-name> [r
 # prints the key ARN + alias ARN — use either as cell_kms_key_arn
 ```
 
+The script tags the key `omnistrate.com/customer-managed-kms=true` for you (item
+1 of the *CMK EBS volumes* section above), so the EBS CSI driver can encrypt the
+self-hosted-ES / observability volumes. It applies the tag on both paths, so
+re-running it also back-tags a key that pre-dates this behaviour. You still need
+step 2 there (reconcile the account's `AccountConfigSetup` stack) so the driver
+role actually carries the KMS actions.
+
 That's the whole CMK step for a same-account cell. **Skip the locked-down flow
 below** — it applies only to a customer key that does not delegate to root.
 
