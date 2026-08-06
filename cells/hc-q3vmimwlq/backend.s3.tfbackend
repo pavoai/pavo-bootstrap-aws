@@ -1,0 +1,5 @@
+bucket         = "pavo-tf-state-026249143599"
+key            = "pavo-bootstrap-aws/hc-q3vmimwlq/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "pavo-tf-state-locks"
+encrypt        = true
