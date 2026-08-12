@@ -125,6 +125,39 @@
     ]
   },
   {
+    "sid": "LambdaMicrovmsLifecycle",
+    "scope": "boundary",
+    "effect": "Allow",
+    "actions": [
+      "lambda:RunMicrovm",
+      "lambda:GetMicrovm",
+      "lambda:ListMicrovms",
+      "lambda:SuspendMicrovm",
+      "lambda:ResumeMicrovm",
+      "lambda:TerminateMicrovm",
+      "lambda:CreateMicrovmAuthToken",
+      "lambda:GetMicrovmImage",
+      "lambda:ListMicrovmImages",
+      "lambda:ListMicrovmImageVersions"
+    ],
+    "resources": [
+      "arn:aws:lambda:*:*:microvm*",
+      "arn:aws:lambda:*:*:microvm-image*"
+    ]
+  },
+  {
+    "sid": "LambdaMicrovmsPassConnector",
+    "comment": "Resource MUST be '*': RunMicrovm implicitly attaches the INTERNET_EGRESS network connector and the authorizer checks lambda:PassNetworkConnector against it, but rejects every resource-scoped form of that ARN (the implicit connector exposes no stable account-scoped ARN to name). Without this, RunMicrovm fails AccessDenied even when the lifecycle grants are correct. Boundary-only ceiling: nothing is granted to any identity until enable_lambda_microvms turns the matching identity-policy statement on. Mirrors the rationale in terraform-omnistrate-aws/main.tf.",
+    "scope": "boundary",
+    "effect": "Allow",
+    "actions": [
+      "lambda:PassNetworkConnector"
+    ],
+    "resources": [
+      "*"
+    ]
+  },
+  {
     "sid": "IAMScopedToPavoNames",
     "scope": "runner",
     "effect": "Allow",
