@@ -9,7 +9,8 @@
 #   - Grafana         (in-VPC UI, internal ingress, dashboards as-code)
 #   - OTel collector  (receives app OTLP metrics -> remote-writes to Prometheus)
 # All PVCs bind the customer's single CMK via the gp3-cmk StorageClass below.
-# Zero egress: nothing here targets anything outside the cluster.
+# Zero telemetry egress: no metrics/logs leave the VPC, and no AWS API
+# dependencies — all metrics come from in-cluster scrapes.
 #
 # Secrets are generated with random_password (bootstrap state is customer-local,
 # so they stay in the customer's control; the break-glass Role cannot read k8s
@@ -367,6 +368,9 @@ resource "helm_release" "observability_otel_collector" {
 #   - Intern               pavo_* agent telemetry + resources
 #   - Onboarding-copy      onboarding_* + resources
 #   - Tribal-knowledge     resources + sub-service breakdown
+#   - Temporal             self-hosted Temporal server/SDK/RDS (empty unless
+#                          temporal_mode=self_hosted; authored pre-first-cell,
+#                          validate series names on first apply)
 # Elasticsearch is a full row in Infrastructure (no separate ES dashboard).
 # Adding a dashboard = drop a <name>-configmap.yaml in manifests/ and list it here.
 resource "kubectl_manifest" "obs_dashboards" {
@@ -376,6 +380,7 @@ resource "kubectl_manifest" "obs_dashboards" {
     "dashboard-intern-configmap.yaml",
     "dashboard-onboarding-configmap.yaml",
     "dashboard-tribal-configmap.yaml",
+    "dashboard-temporal-configmap.yaml",
   ]) : toset([])
 
   server_side_apply = true

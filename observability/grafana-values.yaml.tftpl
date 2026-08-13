@@ -2,7 +2,8 @@
 # ${grafana_host} (the cell's external hostname).
 #
 # Invariants: telemetry OFF (no phone-home); Postgres metadata backend;
-# in-VPC Prometheus datasource only; dashboards as-code via the sidecar.
+# dashboards as-code via the sidecar; single in-VPC Prometheus datasource —
+# no AWS API dependencies.
 
 fullnameOverride: pavo-observability-grafana
 

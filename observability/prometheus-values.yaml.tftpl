@@ -267,3 +267,88 @@ serverFiles:
               severity: warning
             annotations:
               summary: "Elasticsearch exporter not scrapeable"
+      # Self-hosted Temporal (temporal_mode=self_hosted). Every rule is
+      # presence-based (no absent()): on cells running Temporal Cloud these
+      # series don't exist and the rules stay silent. All signals are
+      # in-cluster scrapes — no CloudWatch/AWS API dependency; RDS trouble
+      # surfaces via the persistence_* rules below.
+      # SLO thresholds from the LLD: StartWorkflowExecution p95 < 150ms,
+      # schedule-to-start p95 < 150ms, shard lock latency < 5ms.
+      # Alertnames are mention-map keys in central-ci/variables.tf — rename both.
+      - name: temporal
+        rules:
+          - alert: TemporalRoleUnavailable
+            expr: kube_deployment_status_replicas_available{deployment=~"temporal-(frontend|history|matching|worker)"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Temporal {{ $labels.deployment }} has 0 available replicas"
+          - alert: TemporalServiceErrorRateHigh
+            expr: sum(rate(service_errors[5m])) / sum(rate(service_requests[5m])) > 0.05
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Temporal service error ratio above 5%"
+          - alert: TemporalStartWorkflowLatencySLO
+            expr: histogram_quantile(0.95, sum by (le) (rate(service_latency_bucket{operation="StartWorkflowExecution"}[5m]))) > 0.15
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "StartWorkflowExecution p95 above the 150ms SLO"
+          - alert: TemporalScheduleToStartLatencySLO
+            # SDK histograms are in MILLISECONDS (Core SDK default, durations_as_seconds
+            # unset in intern worker.py) — unlike the server metrics above (seconds).
+            expr: histogram_quantile(0.95, sum by (le) (rate(temporal_workflow_task_schedule_to_start_latency_bucket[5m]))) > 150
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Workflow task schedule-to-start p95 above the 150ms SLO (workers starving?)"
+          - alert: TemporalShardLockLatencyHigh
+            expr: histogram_quantile(0.99, sum by (le) (rate(lock_latency_bucket{operation="ShardInfo"}[5m]))) > 0.005
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Shard lock latency p99 above 5ms — shard contention (too few shards?)"
+          - alert: TemporalPersistenceErrors
+            expr: sum(rate(persistence_errors[5m])) > 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Temporal persistence errors — RDS trouble (connections/storage/timeouts)"
+          - alert: TemporalResourceExhausted
+            expr: sum(rate(service_errors_resource_exhausted[5m])) > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Temporal shedding load (resource_exhausted) — rps/concurrency limits hit"
+          # Payload-size pair (LLD phase 9.3). increase() with no `for`: a single
+          # rejection must fire; rate()>0 decays before a 5m hold completes.
+          - alert: TemporalPayloadSizeRejections
+            expr: sum(increase(blob_size_error[5m])) > 0
+            labels:
+              severity: critical
+            annotations:
+              summary: "Temporal rejecting payloads (blob or memo over the 2 MiB default limit) — workflows failing on payload size"
+          - alert: TemporalBlobSizeApproachingLimit
+            expr: histogram_quantile(0.95, sum by (le) (rate(event_blob_size_bucket[5m]))) > 1572864
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Temporal p95 event blob size above 1.5 MiB — approaching the 2 MiB default rejection limit"
+          # Blind spot closer: tasks on a queue nobody polls (worker pointed at a
+          # wrong/renamed task queue) are invisible to every other metric —
+          # schedule-to-start is SDK-side and only recorded on pickup.
+          - alert: TemporalTaskQueueNoPollers
+            expr: sum by (taskqueue) (increase(no_poller_tasks[10m])) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: "Temporal tasks arriving on task queue {{ $labels.taskqueue }} with no pollers — worker missing or polling a wrong queue name; workflows hang silently"
