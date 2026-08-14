@@ -66,6 +66,20 @@
     "resources": ["arn:aws:sqs:*:*:pavo-*"]
   },
   {
+    "sid": "SES",
+    "effect": "Allow",
+    "actions": [
+      "ses:SendEmail",
+      "ses:CreateEmailIdentity",
+      "ses:DeleteEmailIdentity",
+      "ses:GetEmailIdentity",
+      "ses:TagResource",
+      "ses:UntagResource",
+      "ses:PutEmailIdentityDkimSigningAttributes"
+    ],
+    "resources": ["arn:aws:ses:*:*:identity/*"]
+  },
+  {
     "sid": "EFSCreateFileSystemWithRequestTag",
     "scope": "runner",
     "effect": "Allow",

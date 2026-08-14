@@ -71,6 +71,22 @@
       ]
     },
     {
+      "Sid": "SES",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail",
+        "ses:CreateEmailIdentity",
+        "ses:DeleteEmailIdentity",
+        "ses:GetEmailIdentity",
+        "ses:TagResource",
+        "ses:UntagResource",
+        "ses:PutEmailIdentityDkimSigningAttributes"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ]
+    },
+    {
       "Sid": "BedrockInvokeScopedToModels",
       "Effect": "Allow",
       "Action": [
