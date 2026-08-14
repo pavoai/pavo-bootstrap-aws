@@ -198,6 +198,25 @@ enforce-mode apply.
   `bootstrap_cell` (the single-cell sentinel described under *Resource scopes*;
   `prevent_destroy = true`).
 
+### S3 — OpenTofu provider mirror (cell scope)
+
+A private per-cell bucket `pavo-tf-mirror-<cluster>` (SSE-S3, Block Public Access
+on) whose policy allows anonymous `GetObject` **only** from the cell's VPC endpoint
+(`aws:sourceVpc`) and denies non-TLS. It serves the Terraform providers to the
+cell's tf-executor over the S3 gateway endpoint. Bootstrap only **provisions** this
+bucket; a companion spec change (`cliConfigFileOverride`, shipped separately) then
+points every AWS cell's `network_mirror` at it with **no registry fallback**, so
+terraform installs providers with **no public-registry egress** (a strict,
+default-deny cell then needs no registry egress at all). **Once that wiring is in
+place**, the bucket must be populated **before the cell's next terraform apply** or
+that apply fails:
+
+```bash
+scripts/build-provider-mirror.sh ./mirror s3://pavo-tf-mirror-<cluster>/providers
+```
+
+Refresh it in the release pipeline whenever a provider version bumps.
+
 ## Permission boundary scoping & verification
 
 The workload boundary (`policy-statements.json` → `pavo-permission-boundary-shared`)
