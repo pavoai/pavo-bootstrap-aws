@@ -58,7 +58,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "provider_mirror" 
 }
 
 # Block Public Access stays fully ON. The read policy below is conditioned on
-# aws:sourceVpc, which S3 evaluates as NON-public, so BlockPublicPolicy /
+# aws:SourceVpc, which S3 evaluates as NON-public, so BlockPublicPolicy /
 # RestrictPublicBuckets still permit it while ACL-based public access is blocked.
 resource "aws_s3_bucket_public_access_block" "provider_mirror" {
   bucket = aws_s3_bucket.provider_mirror.id
@@ -71,7 +71,7 @@ resource "aws_s3_bucket_public_access_block" "provider_mirror" {
 
 # Anonymous read, but ONLY for requests arriving from this cell's VPC (via the S3
 # gateway endpoint). OpenTofu's network mirror fetches provider archives without
-# credentials, so the objects must be anonymously GET-able; the aws:sourceVpc
+# credentials, so the objects must be anonymously GET-able; the aws:SourceVpc
 # condition keeps that access private to the cell and off the public internet.
 # Non-TLS access is denied (network_mirror uses https).
 resource "aws_s3_bucket_policy" "provider_mirror" {
@@ -87,7 +87,7 @@ resource "aws_s3_bucket_policy" "provider_mirror" {
         Action    = "s3:GetObject"
         Resource  = "${aws_s3_bucket.provider_mirror.arn}/*"
         Condition = {
-          StringEquals = { "aws:sourceVpc" = var.vpc_id }
+          StringEquals = { "aws:SourceVpc" = var.vpc_id }
         }
       },
       {
