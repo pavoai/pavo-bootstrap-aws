@@ -202,7 +202,7 @@ enforce-mode apply.
 
 A private per-cell bucket `pavo-tf-mirror-<cluster>` (SSE-S3, Block Public Access
 on) whose policy allows anonymous `GetObject` **only** from the cell's VPC endpoint
-(`aws:sourceVpc`) and denies non-TLS. It serves the Terraform providers to the
+(`aws:SourceVpc`) and denies non-TLS. It serves the Terraform providers to the
 cell's tf-executor over the S3 gateway endpoint. Bootstrap only **provisions** this
 bucket; a companion spec change (`cliConfigFileOverride`, shipped separately) then
 points every AWS cell's `network_mirror` at it with **no registry fallback**, so
