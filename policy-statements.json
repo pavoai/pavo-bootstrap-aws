@@ -73,6 +73,7 @@
       "ses:CreateEmailIdentity",
       "ses:DeleteEmailIdentity",
       "ses:GetEmailIdentity",
+      "ses:ListTagsForResource",
       "ses:TagResource",
       "ses:UntagResource",
       "ses:PutEmailIdentityDkimSigningAttributes"
