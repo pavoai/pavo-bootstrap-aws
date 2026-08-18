@@ -9,9 +9,10 @@
 #   - every AWS cell installs providers from its in-account mirror (a strict,
 #     default-deny cell therefore needs no registry egress at all), and
 #   - the bucket must be POPULATED before a cell's next terraform apply, or that
-#     apply fails. Populate with scripts/build-provider-mirror.sh
-#     (tofu providers mirror -> aws s3 sync s3://<bucket>/providers), and refresh
-#     it in the release pipeline whenever a provider version bumps.
+#     apply fails. Populate with scripts/populate-provider-mirror.sh
+#     (tofu providers mirror -> aws s3 sync s3://<bucket>/providers), and re-run it
+#     whenever a provider version bumps. (Pavo-run cells can instead use the
+#     monorepo's scripts/build-provider-mirror.sh, which reads the workload locks.)
 #
 # Created unconditionally (no gating flag): because the mirror is authoritative
 # with no fallback, a cell without this bucket would fail terraform, so it is not
@@ -111,7 +112,7 @@ resource "aws_s3_bucket_policy" "provider_mirror" {
 }
 
 output "provider_mirror_bucket" {
-  description = "In-account OpenTofu provider mirror bucket. Populate with scripts/build-provider-mirror.sh before the cell's next terraform apply."
+  description = "In-account OpenTofu provider mirror bucket. Populate with scripts/populate-provider-mirror.sh before the cell's next terraform apply."
   value       = aws_s3_bucket.provider_mirror.bucket
 }
 
