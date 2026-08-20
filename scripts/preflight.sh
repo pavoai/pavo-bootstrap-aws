@@ -16,7 +16,7 @@
 #                  script cannot reproduce arbitrary caller auth, so preflight
 #                  validates only environment-independent prerequisites. Verify
 #                  EKS authorization separately with the recipe in
-#                  README -> "Cross-account authorization (verify before apply)".
+#                  README -> "Consuming as a child module".
 #
 # Exit code: 0 pass; 1 fail (see the FAIL line).
 # This script does no destructive operations — it only reads.
@@ -60,7 +60,7 @@ if [ "$MODE" = "child" ]; then
   printf 'Your root/CI must supply the AWS provider for the cell account, and the\n'
   printf 'exec-auth principal (k8s_get_token_role_arn, or your ambient role) must have\n'
   printf 'an EKS access entry + AmazonEKSClusterAdminPolicy on the cluster. Verify with\n'
-  printf 'the recipe in README -> "Cross-account authorization (verify before apply)".\n'
+  printf 'the recipe in README -> "Consuming as a child module".\n'
   exit 0
 fi
 
@@ -105,10 +105,10 @@ pass "kubeconfig refreshed (context: $EKS_CLUSTER_NAME)"
 
 # --- Hard gate: cluster-admin RBAC ---------------------------------------
 if ! CAN_I=$(kubectl auth can-i '*' '*' --all-namespaces 2>/dev/null); then
-  fail "kubectl auth can-i '*' '*' --all-namespaces returned non-zero — RBAC denied (Case B). See README → 'Bootstrapping a brand-new cell' for the manual access-entry remediation."
+  fail "kubectl auth can-i '*' '*' --all-namespaces returned non-zero — RBAC denied (Case B). See RUNBOOKS.md → 'Case B' for the manual access-entry remediation."
 fi
 if [ "$CAN_I" != "yes" ]; then
-  fail "kubectl auth can-i '*' '*' --all-namespaces returned '$CAN_I' (expected 'yes'). RBAC denied (Case B). See README → 'Bootstrapping a brand-new cell' for the manual access-entry remediation."
+  fail "kubectl auth can-i '*' '*' --all-namespaces returned '$CAN_I' (expected 'yes'). RBAC denied (Case B). See RUNBOOKS.md → 'Case B' for the manual access-entry remediation."
 fi
 pass "cluster-admin RBAC confirmed (kubectl auth can-i '*' '*' --all-namespaces = yes)"
 
