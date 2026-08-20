@@ -273,7 +273,11 @@ serverFiles:
       # in-cluster scrapes — no CloudWatch/AWS API dependency; RDS trouble
       # surfaces via the persistence_* rules below.
       # SLO thresholds from the LLD: StartWorkflowExecution p95 < 150ms,
-      # schedule-to-start p95 < 150ms, shard lock latency < 5ms.
+      # schedule-to-start p95 < 150ms, shard lock latency < 1ms.
+      # Shard lock is the one alert that deliberately sits above its SLO: it
+      # pages at 5ms, not 1ms. A healthy cell already measures ~0.99ms p99
+      # under load, so alerting at the target would flap. 5ms = contention
+      # worth waking someone for; use the dashboard panel to track the SLO.
       # Alertnames are mention-map keys in central-ci/variables.tf — rename both.
       - name: temporal
         rules:
