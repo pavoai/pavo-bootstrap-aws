@@ -435,7 +435,7 @@ data "kubectl_file_documents" "obs_sanitizer" {
     sanitizer_image  = var.sanitizer_image
     customer_name    = var.customer_name
     cell_id          = var.eks_cluster_name
-    aws_region       = var.aws_region
+    aws_region       = data.aws_region.current.name
     ghcr_pull_secret = local.obs_ghcr_pull_secret
   })
 }

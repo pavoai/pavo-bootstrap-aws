@@ -1,8 +1,3 @@
-variable "aws_region" {
-  description = "AWS region where the Pavo deployment lives."
-  type        = string
-}
-
 variable "vpc_id" {
   description = "VPC ID where the EKS cluster runs (Omnistrate-provisioned)."
   type        = string
@@ -36,16 +31,35 @@ variable "runner_role_arn" {
   type        = string
 
   validation {
-    # Reject assumed-role session ARNs — they look like
-    #   arn:aws:sts::<acct>:assumed-role/<RoleName>/<session>
-    # and they're a common mistake when copying from `aws sts get-caller-identity`.
-    # AWS access entries need the underlying role ARN, not the assumed session.
-    condition = (
-      length(var.runner_role_arn) > 0 &&
-      startswith(var.runner_role_arn, "arn:aws:iam::") &&
-      length(regexall("[:/]assumed-role/", var.runner_role_arn)) == 0
-    )
+    # Strict IAM-role-ARN match. Rejects assumed-role session ARNs
+    # (arn:aws:sts::<acct>:assumed-role/<RoleName>/<session>) AND is deliberately
+    # strict because the account parsed out of this ARN is now load-bearing: it is
+    # the deterministic cell-account guard for the injected AWS provider (see
+    # providers.tf preconditions on data.aws_eks_cluster.primary).
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.runner_role_arn))
     error_message = "runner_role_arn must be an IAM role ARN (arn:aws:iam::<acct>:role/<RoleName>), not an assumed-role session ARN. Use `aws iam list-roles` to find the role, or strip the trailing `/<session>` and replace `:sts::<acct>:assumed-role/` with `:iam::<acct>:role/`."
+  }
+}
+
+variable "k8s_get_token_role_arn" {
+  description = <<-EOT
+    Cross-account compatibility input for exec-based EKS authentication. When set,
+    the kubernetes/helm/kubectl providers run `aws eks get-token --role-arn <this>`.
+    The AWS CLI runs independently of Terraform's AWS provider, so the process's
+    AMBIENT AWS credentials must be able to assume this role. This does NOT inherit
+    provider-only assume-role options (e.g. external_id). Empty (default) = use
+    ambient credentials directly (correct when the run already executes in the cell
+    account). The role must already have an EKS access entry + AmazonEKSClusterAdminPolicy
+    on the cluster; the module does NOT create it (a one-time operator prerequisite,
+    once per role/cluster pair). It must differ from runner_role_arn and live in the
+    same account as the injected AWS provider (enforced in providers.tf).
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.k8s_get_token_role_arn == "" || can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.k8s_get_token_role_arn))
+    error_message = "k8s_get_token_role_arn must be empty or an IAM role ARN (arn:aws:iam::<acct>:role/<name>)."
   }
 }
 
