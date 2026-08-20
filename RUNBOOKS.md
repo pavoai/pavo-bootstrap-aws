@@ -184,37 +184,41 @@ gateway-endpoint route so pod→S3/DynamoDB traffic stays private in-VPC. Omnist
 provisions its own gateway endpoints; historically only on the main route table, so
 this module covered every non-main route table. That assumption broke: on some cells
 Omnistrate's endpoints already span non-main route tables, and a route table may
-carry only **one** gateway-endpoint route per service — so associating ours with an
+carry only **one** gateway-endpoint route per service, so associating ours with an
 already-covered table fails the apply with `RouteAlreadyExists`.
 
-Since v0.6.0 the endpoints are **adaptive**: `missing = required − external_coverage`,
-where external coverage is the route tables already covered by a **non-Pavo** gateway
-endpoint. Ownership is recognised by the canonical `pavo:managed-by=pavo-bootstrap-aws`
-tag OR the legacy per-service `purpose` tag (every Pavo endpoint has `purpose`, so our
-own endpoints are excluded from external coverage without any pre-seeding). We create
-an endpoint only for the route tables nobody external covers; when Omnistrate already
-covers everything (common on fresh cells), we create **none**.
+Since v0.6.1 the endpoints are **adaptive**: `missing = required − Omnistrate's
+route_table_ids`, per service. We create an endpoint only for the route tables
+Omnistrate does not cover; when Omnistrate already covers everything (common on fresh
+cells), we create **none**. We read Omnistrate's endpoint directly, so our own endpoint
+never enters the calculation.
 
-Discovery enumerates endpoints via the **Resource Groups Tagging API**
-(`data.aws_resourcegroupstaggingapi_resources`, `resource_type_filters =
-["ec2:vpc-endpoint"]`), then looks each up by unique id. This is the only native path:
-the provider has no plural endpoint list source, and the route-table data source omits
-gateway prefix-list routes. It runs as the provider identity, so it is cross-account
-correct. Contract: **every Pavo and Omnistrate cell gateway endpoint is tagged** (both
-classes always are); an endpoint that has *never* carried any tag would be invisible to
-the Tagging API (accepted limitation).
+Discovery is a **live describe** of Omnistrate's endpoint per service
+(`data.aws_vpc_endpoint`, `state = "available"`, filtered to this cell by
+`tag:omnistrate.com/host-cluster-id` + `tag:omnistrate.com/managed-by` and
+`vpc-endpoint-type = Gateway`). It uses `ec2:DescribeVpcEndpoints` (already granted to
+the runner) and runs as the provider identity, so it is cross-account correct. A live
+describe was chosen over the Resource Groups Tagging API deliberately: the Tagging API
+is an eventually-consistent index that can return a *deleted* endpoint id, and a stale
+id anywhere in the account would fail the plan on a per-id lookup. The live describe
+returns only what exists now, scoped to this cell.
 
-**Failure mode — `tag:GetResources` denied.** The discovery runs during *planning* as
-the plan-time provider identity. If that identity lacks `tag:GetResources`, the plan
-fails on `data.aws_resourcegroupstaggingapi_resources` **before creating anything**.
-It cannot be self-granted (the permission is needed at plan time). Fix by granting it
-(read-only, necessarily `Resource: "*"` — the Tagging API has no resource scoping) and
-confirming the **effective** decision:
+**Contract.** `data.aws_vpc_endpoint` resolves **exactly one** endpoint. This encodes
+the invariant that Omnistrate supplies exactly one available S3 and one available
+DynamoDB gateway endpoint per cell. Zero or two matches fails planning **before any
+mutation** (a clear, safe failure). During an Omnistrate endpoint replacement there may
+momentarily be no `available` match; the plan fails then too, which is correct — the
+external coverage is not stable and Pavo should not race in to rewrite routing. Inspect
+what the filter resolves to:
 
 ```bash
-aws iam simulate-principal-policy \
-  --policy-source-arn <plan-identity-role-arn> \
-  --action-names tag:GetResources          # expect EvalDecision: allowed
+aws ec2 describe-vpc-endpoints --filters \
+  Name=vpc-id,Values=<vpc> Name=vpc-endpoint-type,Values=Gateway \
+  Name=service-name,Values=com.amazonaws.<region>.s3 \
+  Name=vpc-endpoint-state,Values=available \
+  "Name=tag:omnistrate.com/host-cluster-id,Values=<cluster>" \
+  "Name=tag:omnistrate.com/managed-by,Values=omnistrate" \
+  --query 'VpcEndpoints[].{id:VpcEndpointId,rts:RouteTableIds}'
 ```
 
 
