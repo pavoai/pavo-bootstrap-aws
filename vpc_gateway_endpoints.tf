@@ -18,6 +18,20 @@
 # endpoint (true on Omnistrate cells today — theirs is main-RT only). If that
 # changes, the apply fails fast on the conflicting association rather than
 # silently; exclude those route tables here if so.
+#
+# MIGRATION (v0.5.4 -> v0.5.5): a later release makes these endpoints ADAPTIVE —
+# it discovers which route tables an EXTERNAL (Omnistrate) gateway endpoint
+# already covers and creates ours only for the uncovered ones, so a cell whose
+# Omnistrate endpoint already spans the non-main route tables (the assumption
+# above no longer holding) no longer fails on a conflicting association. That
+# discovery must exclude OUR OWN endpoints, or it would count our coverage as
+# external and oscillate. The `pavo:managed-by = pavo-bootstrap-aws` tag added
+# below is that discriminator. It is introduced in THIS release (v0.5.4) with no
+# behavior change precisely so existing owners' endpoints carry the marker
+# BEFORE the adaptive logic reads it. Consequence: v0.5.5 is NOT a valid direct
+# upgrade for any state that already manages these endpoints — such owners must
+# apply v0.5.4 first. Fresh cells (no legacy endpoint state) may adopt v0.5.5
+# directly.
 
 data "aws_route_tables" "cell" {
   vpc_id = var.vpc_id
@@ -47,7 +61,12 @@ resource "aws_vpc_endpoint" "s3_gateway" {
 
   tags = {
     managed-by = "omnistrate"
-    purpose    = "byoc-private-s3"
+    # Durable discriminator so a later adaptive release can tell OUR gateway
+    # endpoints apart from a pre-existing Omnistrate one when deciding which
+    # route tables still need coverage. Purely additive: does not change the
+    # existing `managed-by` tag's semantics. See the migration note below.
+    "pavo:managed-by" = "pavo-bootstrap-aws"
+    purpose           = "byoc-private-s3"
   }
 }
 
@@ -58,7 +77,8 @@ resource "aws_vpc_endpoint" "dynamodb_gateway" {
   route_table_ids   = local.private_route_table_ids
 
   tags = {
-    managed-by = "omnistrate"
-    purpose    = "byoc-private-dynamodb"
+    managed-by        = "omnistrate"
+    "pavo:managed-by" = "pavo-bootstrap-aws"
+    purpose           = "byoc-private-dynamodb"
   }
 }
