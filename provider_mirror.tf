@@ -118,5 +118,5 @@ output "provider_mirror_bucket" {
 
 output "provider_mirror_network_mirror_url" {
   description = "network_mirror base URL wired into the spec cliConfigFileOverride."
-  value       = "https://${aws_s3_bucket.provider_mirror.bucket}.s3.${var.aws_region}.amazonaws.com/providers/"
+  value       = "https://${aws_s3_bucket.provider_mirror.bucket}.s3.${data.aws_region.current.name}.amazonaws.com/providers/"
 }

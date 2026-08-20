@@ -4,9 +4,9 @@
 #
 # Non-secret infra identifiers only (VPC/subnet/OIDC/cluster + an Omnistrate
 # role ARN). The first five come from the Omnistrate console / SSM
-# (/pavo/cells/hc-fmnwao4ct/*).
+# (/pavo/cells/hc-fmnwao4ct/*). Region is NOT set here: it comes from the AWS
+# provider (AWS_REGION in the apply environment; us-east-1 for this cell).
 
-aws_region         = "us-east-1"
 vpc_id             = "vpc-0ea2317980247669a"
 private_subnet_ids = ["subnet-0e627382dcb74e001", "subnet-0c8570408aa48b807", "subnet-0430320668ebd7ad1"]
 eks_cluster_name   = "hc-fmnwao4ct"

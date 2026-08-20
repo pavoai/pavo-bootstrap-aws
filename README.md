@@ -518,42 +518,56 @@ For Terraform Cloud / HCP Terraform / other backends, see
 - AWS account with admin credentials configured (`aws sts get-caller-identity`
   works).
 - EKS cluster + VPC already provisioned by Omnistrate's CFN bootstrap stack.
-- **CLIs on PATH**: `aws` (≥ v2), `kubectl`, `helm`. Bootstrap now creates K8s
-  + Helm resources on the cell's cluster, so all three are required.
-- **Cluster-admin RBAC on the EKS cluster** from the principal running
-  `terraform apply`. The Omnistrate CFN-provisioned cluster typically grants
-  this via the AdministratorAccess SSO role; if your principal doesn't have
-  it, see *Case B: bootstrapping without K8s admin* below.
+- **CLIs on PATH**: `aws` (≥ v2) and `terraform` are always required — `aws` is the
+  exec-auth plugin the Kubernetes providers invoke. The `kubectl`/`helm` **binaries
+  are NOT** needed for a Terraform apply (the Helm provider embeds the SDK; the
+  `alekc/kubectl` provider is self-contained). They are used only by `--mode=direct`
+  preflight and by the manual authorization-verification recipe.
+- **The AWS provider is caller-owned.** This module declares no `provider "aws"`
+  block; the caller/root supplies it (region, credentials, `assume_role`). See
+  *Consuming as a child module (cross-account BYOC)*.
+- **Cluster-admin RBAC on the EKS cluster** for the principal whose credentials the
+  Kubernetes/Helm providers authenticate as. For direct apply that is your ambient
+  principal; for a cross-account child-module run it is `k8s_get_token_role_arn`.
+  If it doesn't have access, see *Case B* / the cross-account authorization recipe.
 
-Run **`scripts/preflight.sh`** before `terraform init` — it verifies CLI
-presence, AWS creds, cluster reachability, and cluster-admin RBAC. Hard gate is
-`kubectl auth can-i '*' '*' --all-namespaces`. The script refreshes your
-kubeconfig as a side-effect.
+Run **`scripts/preflight.sh`** before `terraform init`. It **requires a mode**:
+
+- `--mode=direct` — you apply this directory as a Terraform root with credentials
+  already in the cell account. Verifies CLI presence, AWS creds, cluster
+  reachability, and cluster-admin RBAC (hard gate `kubectl auth can-i '*' '*'`);
+  refreshes your kubeconfig as a side-effect.
+- `--mode=child` — you consume this repo as a Terraform child module (your root/CI
+  owns the AWS provider and EKS authorization). Verifies only the
+  environment-independent prerequisites (`aws` + `terraform` present); it does not
+  and cannot validate your caller auth. See *Consuming as a child module* below.
 
 ```bash
 export EKS_CLUSTER_NAME=hc-fmnwao4ct  # your cluster name
 export AWS_REGION=us-east-1           # your region
-./scripts/preflight.sh
+./scripts/preflight.sh --mode=direct
 ```
 
 ## Variables
 
 | Variable | Description |
 |---|---|
-| `aws_region` | AWS region where the Pavo deployment lives. |
 | `vpc_id` | VPC ID provisioned by Omnistrate's CFN. |
 | `private_subnet_ids` | Private subnet IDs (Omnistrate-tagged `kubernetes.io/role/internal-elb=1`). |
 | `eks_cluster_name` | EKS cluster name (Omnistrate-provisioned). |
 | `eks_oidc_provider` | EKS OIDC issuer URL **without** the `https://` prefix. |
-| `runner_role_arn` | IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the role ARN (`arn:aws:iam::<acct>:role/<RoleName>`), NOT an assumed-role session ARN. |
+| `runner_role_arn` | IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the role ARN (`arn:aws:iam::<acct>:role/<RoleName>`), NOT an assumed-role session ARN. Its account must equal the injected AWS provider's account (the deterministic cell-account guard). |
+| `k8s_get_token_role_arn` | *Optional; cross-account only.* IAM role the K8s/Helm exec-auth (`aws eks get-token --role-arn`) assumes when the run's **ambient** credentials are in a different account than the cell (e.g. a central Atlantis/CI account that assumes into the cell only at the provider level). Ambient creds must be able to assume it; it does **not** inherit provider-only options like `external_id`. Must differ from `runner_role_arn` and be in the provider's account. The module does **not** create its access entry (operator prerequisite). Empty = use ambient creds directly. |
 | `image_policy_mode` | Sigstore ClusterImagePolicy enforcement mode for `ghcr.io/pavoai/**` images. `"enforce"` (default) rejects admission of images that fail verification; `"warn"` admits them and emits a Warning to admission callers (reserved for one-off signing-bake-in on a fresh image lineup). |
 | `policy_controller_chart_version` | Helm chart version for `sigstore/policy-controller`. Default `0.10.6`. Bump deliberately and validate by setting `image_policy_mode = "warn"` for the upgrade apply — chart upgrades can change webhook config paths or CRD API versions. |
 | `central_ci_project_id` | GCP project hosting Pavo's central Cloud Build that builds + signs all `ghcr.io/pavoai/*` images. Default `onboarding-455713`. The per-service signing SAs live here as `cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com`. Override only if you've forked the signing pipeline into a different GCP project. |
 | `enable_eck` | Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. **Default `false`.** Set `true` **only** on a cell that will host a self-hosted in-VPC Elasticsearch instance (`es_mode = self_hosted`). Cloud-Elasticsearch-only cells should leave it off to avoid an idle operator, CRDs, and validating webhook. When `true`, the cell publishes `/pavo/cells/<eks_cluster_name>/eck_ready=true`; the per-instance module reads that and **fails fast** if a `self_hosted` instance is created before ECK exists. |
 | `eck_operator_chart_version` | Helm chart version for `elastic/eck-operator` (operator + CRDs move in lockstep). Default `3.4.0`. Only relevant when `enable_eck = true`. Confirm the ECK ↔ Elasticsearch support matrix before bumping (ECK 3.x supports the 8.x and 9.x stacks). |
 
-Populate the first 5 from the Omnistrate console (instance details panel) or
-via `aws eks describe-cluster --name <cluster-name>`. The remaining variables
+Populate the infra identifiers (`vpc_id`, `private_subnet_ids`, `eks_cluster_name`,
+`eks_oidc_provider`, `runner_role_arn`) from the Omnistrate console (instance
+details panel) or via `aws eks describe-cluster --name <cluster-name>`. Region is
+**not** a variable — it comes from the injected AWS provider. The remaining variables
 default to safe values for a **new** cloud-Elasticsearch cell — override only if
 you need to: flip Sigstore enforcement mode, pin a different
 policy-controller/ECK chart version, repoint the signer project, or **enable ECK
@@ -598,7 +612,7 @@ error message that shows how to convert a session ARN to the role ARN.
 ## Apply
 
 ```bash
-./scripts/preflight.sh
+./scripts/preflight.sh --mode=direct
 # Configure backend.tf first (see "Configuring Terraform state" above), then:
 terraform init
 terraform plan
@@ -619,6 +633,86 @@ mirror* for why this is mandatory and how to refresh it):
 # Same account/region as the apply; <eks-cluster-name> is the eks_cluster_name var.
 AWS_PROFILE=<account-profile> ./scripts/populate-provider-mirror.sh <eks-cluster-name>
 ```
+
+## Consuming as a child module (cross-account BYOC)
+
+Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.5.0`)
+and consume this repo as a child module. **The AWS provider is caller-owned** — this
+module declares no `provider "aws"` block, so it inherits the provider you configure
+in your root (region, credentials, `assume_role`). Region is read back from that
+provider, so it is never passed as a variable.
+
+**Provider wiring.** If your root's cell-account provider is the **default** `aws`
+provider, inheritance is automatic (pass nothing). If it is **aliased**, pass it
+explicitly (confirmed sufficient by `tests/consumer-root` — `time`/`random` resolve
+implicitly, so only `aws` needs mapping):
+
+```hcl
+module "pavo_bootstrap" {
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.5.0"
+
+  providers = { aws = aws.cell }   # only if your aws provider is aliased
+
+  vpc_id             = var.vpc_id
+  private_subnet_ids = var.private_subnet_ids
+  eks_cluster_name   = var.eks_cluster_name
+  eks_oidc_provider  = var.eks_oidc_provider
+  runner_role_arn    = var.runner_role_arn
+  # k8s_get_token_role_arn = "..."  # cross-account only, see below
+}
+```
+
+**Cross-account exec-auth.** The Kubernetes/Helm providers authenticate with
+`aws eks get-token`, a subprocess that reads the run's **ambient** AWS credentials,
+NOT the Terraform provider's `assume_role`. If your run executes in a *different*
+account than the cell (e.g. a central Atlantis account that assumes into the cell
+only at the provider level), set `k8s_get_token_role_arn` to the cell-account role
+your provider assumes; the token call then assumes it too. Your ambient credentials
+must be able to assume that role (it does **not** inherit provider-only trust options
+like `external_id`).
+
+### Authorization: create + verify (before apply)
+
+`k8s_get_token_role_arn` (or, in the ambient/direct case, your run's principal) must
+have an EKS access entry + `AmazonEKSClusterAdminPolicy`. The module does **not**
+create it — it is a one-time prerequisite **per role/cluster pair**. Run the two
+creation calls under a **cell-account** identity authorized to manage EKS access
+entries (however you obtain those credentials):
+
+```bash
+ROLE_ARN="arn:aws:iam::<cell-acct>:role/<your-exec-role>"; CLUSTER="<eks_cluster_name>"; REGION="<region>"
+aws eks create-access-entry    --cluster-name "$CLUSTER" --principal-arn "$ROLE_ARN" --type STANDARD --region "$REGION"
+aws eks associate-access-policy --cluster-name "$CLUSTER" --principal-arn "$ROLE_ARN" \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy --access-scope type=cluster --region "$REGION"
+```
+
+Then verify the **exact** exec-auth path Terraform will use, with Atlantis-equivalent
+ambient credentials and a throwaway kubeconfig (`--assume-role-arn` does the
+cross-account `DescribeCluster`; `--role-arn` is the K8s identity). The AWS provider
+being able to assume the role does **not** prove this subprocess can:
+
+```bash
+KCFG="$(mktemp)"
+aws eks get-token --cluster-name "$CLUSTER" --region "$REGION" --role-arn "$ROLE_ARN" --output json >/dev/null
+aws eks update-kubeconfig --name "$CLUSTER" --region "$REGION" \
+  --assume-role-arn "$ROLE_ARN" --role-arn "$ROLE_ARN" --kubeconfig "$KCFG" --alias pavo-bootstrap-preflight
+KUBECONFIG="$KCFG" kubectl auth can-i '*' '*' --all-namespaces   # expect: yes
+rm -f "$KCFG"
+```
+
+> **Lifecycle.** Keep this access entry for the entire lifetime of the bootstrap
+> state; remove it only after the final `terraform destroy`. To rotate the role:
+> create B's entry + policy, verify B, switch `k8s_get_token_role_arn` A→B, apply,
+> then remove A. Never revoke the active entry first.
+
+### Migrating an existing consumer to v0.5.0
+
+1. Bump `?ref` to `v0.5.0`.
+2. **Remove** `aws_region = ...` from the `module` block (the input no longer exists).
+3. If your cell provider is aliased, add `providers = { aws = aws.<alias> }`.
+4. Add `k8s_get_token_role_arn` **only if** your run's ambient credentials are in a
+   different account than the cell.
+5. Ensure the exec principal has the access entry above (one-time prerequisite).
 
 ## Brand-new cell: the workload-node / `eck_ready` ordering
 
@@ -700,10 +794,12 @@ hard gate, the principal running `terraform apply` lacks cluster-admin RBAC on
 the EKS cluster. Bootstrap can't create the EKS access entry for the Omnistrate
 runner (that's exactly what it's trying to do) without already having access.
 
-**Remediation** — create a one-off access entry for your principal manually,
-then re-run bootstrap. The bootstrap apply will then add a separate access
-entry for `var.runner_role_arn`; the one-off entry stays out of Terraform state
-and can be removed afterwards.
+**Remediation** — create an access entry for your principal manually, then re-run
+bootstrap. The bootstrap apply also adds a separate access entry for
+`var.runner_role_arn` (the Omnistrate runner). Your own entry stays out of
+Terraform state, but it is the identity Terraform authenticates as for every
+Kubernetes/Helm operation on this bootstrap state, so **keep it** (see the
+lifecycle note after the apply below).
 
 ```bash
 # Get your current principal's underlying role ARN (NOT the assumed-role form):
@@ -728,16 +824,14 @@ aws eks associate-access-policy \
 
 # Apply.
 terraform apply
-
-# Optional cleanup: once bootstrap has run, the one-off access entry for your
-# principal is no longer required (bootstrap created a permanent one for the
-# Omnistrate runner). Remove it if your governance prefers no out-of-band
-# access entries:
-aws eks delete-access-entry \
-  --cluster-name "$EKS_CLUSTER_NAME" \
-  --principal-arn "$MY_ROLE_ARN" \
-  --region "$AWS_REGION"
 ```
+
+> **Do NOT delete this access entry after apply.** Your principal is the identity
+> the Kubernetes/Helm providers authenticate as for **every** operation against
+> this bootstrap state — plan, refresh, update, and destroy. Keep it for the
+> entire lifetime of this bootstrap state; remove it only **after** the final
+> `terraform destroy` has torn down the module's Kubernetes/Helm resources.
+> Revoking it earlier bricks Terraform's ability to clean up.
 
 ### Runner `Unauthorized` on the K8s API after a role recreate
 
