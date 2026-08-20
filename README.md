@@ -23,7 +23,7 @@ for customer consumption.
 ```hcl
 # Production deployments: pin to a tag.
 module "pavo_bootstrap" {
-  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.2.0"
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.6.0"
   # ...
 }
 
@@ -136,6 +136,15 @@ silently ignored and Terraform defaults to local state. Verify init output reads
   principal; for a cross-account child-module run it is `k8s_get_token_role_arn`.
   If it doesn't have access, see the *Authorization: create + verify* recipe below
   (cross-account) or [RUNBOOKS.md → Case B](RUNBOOKS.md#case-b-bootstrapping-without-k8s-admin) (direct apply).
+- **`tag:GetResources` (`Resource: "*"`, read-only) on the plan-time AWS identity.**
+  The gateway-endpoint discovery calls the Resource Groups Tagging API at plan time,
+  so the grant must pre-exist (the module cannot grant it to itself). Verify the
+  effective decision (boundaries/SCPs included) before applying:
+  ```bash
+  aws iam simulate-principal-policy --policy-source-arn <plan-identity-role-arn> \
+    --action-names tag:GetResources        # expect: allowed
+  ```
+  Without it, `terraform plan` fails before anything is created.
 
 Run **`scripts/preflight.sh`** before `terraform init`. It **requires a mode**:
 
@@ -242,7 +251,7 @@ AWS_PROFILE=<account-profile> ./scripts/populate-provider-mirror.sh <eks-cluster
 
 ## Consuming as a child module (cross-account BYOC)
 
-Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.5.0`)
+Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.6.0`)
 and consume this repo as a child module. **The AWS provider is caller-owned** — this
 module declares no `provider "aws"` block, so it inherits the provider you configure
 in your root (region, credentials, `assume_role`). Region is read back from that
@@ -255,7 +264,7 @@ implicitly, so only `aws` needs mapping):
 
 ```hcl
 module "pavo_bootstrap" {
-  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.5.0"
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.6.0"
 
   providers = { aws = aws.cell }   # only if your aws provider is aliased
 
@@ -319,6 +328,18 @@ rm -f "$KCFG"
 4. Add `k8s_get_token_role_arn` **only if** your run's ambient credentials are in a
    different account than the cell.
 5. Ensure the exec principal has the access entry above (one-time prerequisite).
+
+### Migrating an existing consumer to v0.6.0
+
+The gateway endpoints are now adaptive (cover only route tables no external
+Omnistrate endpoint already covers). One new permission is required:
+
+1. Grant `tag:GetResources` to the plan-time identity (see *Prerequisites*).
+2. Bump `?ref` to `v0.6.0` and plan. On an existing owner, expect a `pavo:managed-by`
+   tag add plus a `moved` to `[0]`, with no `route_table_ids` change and no destroy.
+   On a fresh cell where Omnistrate already covers every route table, no endpoint is
+   created.
+
 ## Cell self-hosting flags (`enable_eck`, `enable_observability`)
 
 Each in-VPC substrate a strict/residency customer opts into is gated by an opt-in, **default-`false`** flag:
