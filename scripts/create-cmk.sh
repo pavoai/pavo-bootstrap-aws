@@ -12,7 +12,7 @@
 # (all dev/test cells, e.g. awstest): their IAM policies grant key use, so NO
 # key-policy statements are needed. For a LOCKED-DOWN customer key that does not
 # delegate to account root, do NOT use this script — follow the 5-statement key
-# policy in README "Setting up the CMK".
+# policy in RUNBOOKS.md "Setting up the CMK".
 #
 # Idempotent via the alias `alias/pavo-<name>`: re-running adopts the existing key.
 #
@@ -100,5 +100,5 @@ Done. Set the instance apiParameter cell_kms_key_arn to either form:
 
 Default key policy (root -> kms:*) is used; same-account workload + ESO roles
 grant key use via their IAM policies, so no key-policy edits are needed.
-For a locked-down customer key (no root delegation), see README "Setting up the CMK".
+For a customer-governed key (access granted by the key policy), see RUNBOOKS.md "Setting up the CMK".
 EOF
