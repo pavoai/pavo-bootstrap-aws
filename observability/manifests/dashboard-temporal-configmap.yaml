@@ -1022,6 +1022,7 @@ data:
         },
         {
           "type": "timeseries",
+          "description": "Free slots summed across intern worker pods (pool headroom), orchestrator-task-queue only; LocalActivityWorker omitted (unused, 100/pod). 0 = pool saturated.",
           "title": "Worker task slots available",
           "datasource": {
             "type": "prometheus",
@@ -1058,7 +1059,7 @@ data:
           },
           "targets": [
             {
-              "expr": "min by (worker_type) (temporal_worker_task_slots_available)",
+              "expr": "sum by (worker_type) (temporal_worker_task_slots_available{task_queue=\"orchestrator-task-queue\", worker_type!=\"LocalActivityWorker\"})",
               "legendFormat": "{{worker_type}}",
               "refId": "A",
               "datasource": {
@@ -1070,6 +1071,7 @@ data:
         },
         {
           "type": "timeseries",
+          "description": "Intern SDK workers only (orchestrator-task-queue); the Temporal server's system workers emit the same metric names and are excluded. Expect spikes on injected/real activity failures, heartbeat timeouts after pod loss, and cancellations.",
           "title": "Workflow task execution failures /s",
           "datasource": {
             "type": "prometheus",
@@ -1106,7 +1108,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(temporal_workflow_task_execution_failed[5m]))",
+              "expr": "sum(rate(temporal_workflow_task_execution_failed{task_queue=\"orchestrator-task-queue\"}[5m]))",
               "legendFormat": "wft failed",
               "refId": "A",
               "datasource": {
@@ -1115,7 +1117,7 @@ data:
               }
             },
             {
-              "expr": "sum(rate(temporal_activity_execution_failed[5m]))",
+              "expr": "sum(rate(temporal_activity_execution_failed{task_queue=\"orchestrator-task-queue\"}[5m]))",
               "legendFormat": "activity failed",
               "refId": "B",
               "datasource": {
@@ -1127,6 +1129,7 @@ data:
         },
         {
           "type": "timeseries",
+          "description": "Share of intern workflow tasks served from the sticky cache (no history replay), orchestrator-task-queue only — the Temporal server's own system workers emit the same metric names and are excluded. SDK core registers the miss counter lazily, so `temporal_sticky_cache_miss` is absent until the first miss; the `or vector(0)` guard keeps the ratio defined (1.0) until then. Absent (NaN) while no workflow tasks run.",
           "title": "Sticky cache hit ratio",
           "datasource": {
             "type": "prometheus",
@@ -1164,7 +1167,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(temporal_sticky_cache_hit[5m])) / (sum(rate(temporal_sticky_cache_hit[5m])) + sum(rate(temporal_sticky_cache_miss[5m])))",
+              "expr": "sum(rate(temporal_sticky_cache_hit{task_queue=\"orchestrator-task-queue\"}[5m])) / (sum(rate(temporal_sticky_cache_hit{task_queue=\"orchestrator-task-queue\"}[5m])) + (sum(rate(temporal_sticky_cache_miss{task_queue=\"orchestrator-task-queue\"}[5m])) or vector(0)))",
               "legendFormat": "hit ratio",
               "refId": "A",
               "datasource": {
@@ -1176,7 +1179,7 @@ data:
         },
         {
           "type": "timeseries",
-          "description": "Cache removals that are not a clean workflow completion: cache full, cache miss, task-not-found, unhandled command, non-determinism. The evicted workflow replays its full history on its next task. Expect spikes on worker-pod loss and on cancellation — a sustained rate with neither is the anomaly. The counter carries no reason label; check worker logs for the cause. Absent until the first eviction.",
+          "description": "Cache removals that are not a clean workflow completion: cache full, cache miss, task-not-found, unhandled command, non-determinism. The evicted workflow replays its full history on its next task. Expect spikes on worker-pod loss and on cancellation — a sustained rate with neither is the anomaly. The counter carries no reason label; check worker logs for the cause. orchestrator-task-queue only — the Temporal server's own system workers (temporal_sys_* queues) evict constantly and are excluded. Absent until the first intern eviction.",
           "title": "Sticky cache forced evictions (5m increase)",
           "datasource": {
             "type": "prometheus",
@@ -1213,7 +1216,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(increase(temporal_sticky_cache_total_forced_eviction[5m]))",
+              "expr": "sum(increase(temporal_sticky_cache_total_forced_eviction{task_queue=\"orchestrator-task-queue\"}[5m]))",
               "legendFormat": "forced evictions",
               "refId": "A",
               "datasource": {
