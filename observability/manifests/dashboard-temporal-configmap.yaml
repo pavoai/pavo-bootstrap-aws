@@ -8,6 +8,11 @@
 # < 150ms, shard lock latency < 1ms, throughput = state transitions/s).
 # Worker SDK series (temporal_*) verified on instance-drys9yzpf; server-side
 # series are unverified — validate against a live cell on first apply.
+#
+# "Shards owned" thresholds hardcode 128 (green only at 128). The value comes
+# from the per-cell temporal_history_shards var; a cell created with a
+# non-default shard count will show red here until the steps are updated
+# (panel "Shards owned", fieldConfig.defaults.thresholds.steps).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -35,7 +40,15 @@ data:
         "to": "now"
       },
       "templating": {
-        "list": []
+        "list": [
+          {
+            "type": "constant",
+            "name": "pods",
+            "hide": 2,
+            "query": "(temporal-(frontend|history|matching|worker|web)|intern-temporal-workers)-.*",
+            "description": "Pod-name regex for all Temporal server + intern worker workloads on the Infra row."
+          }
+        ]
       },
       "annotations": {
         "list": []
@@ -100,7 +113,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Cluster-wide throughput in Temporal's native unit (state transitions/s) \u2014 the capacity metric the scaling guide keys on. Should track offered load linearly; a flattening ceiling while latencies rise = capacity limit."
         },
         {
           "type": "timeseries",
@@ -173,7 +187,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Target: p95 < 150ms (scaling-blog SLO; blog measures it client-side, so server-side reads slightly lower). Emits only while starts occur \u2014 gaps mean no starts, not an outage."
         },
         {
           "type": "timeseries",
@@ -246,7 +261,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Target: p95 < 150ms (SDK metric, milliseconds). Time a task waits before a worker picks it up \u2014 rising = workers starving, add workers/slots. Only emits when tasks are dispatched; under the load test this bursts at 20-min stage boundaries. Alert: TemporalScheduleToStartLatencySLO."
         },
         {
           "type": "timeseries",
@@ -258,8 +274,8 @@ data:
           "id": 5,
           "gridPos": {
             "h": 8,
-            "w": 12,
-            "x": 0,
+            "w": 8,
+            "x": 8,
             "y": 9
           },
           "fieldConfig": {
@@ -321,7 +337,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Terminal workflow outcomes. Expect success only; failed/timeout/terminate ~= 0. Cancels are normal and not plotted."
         },
         {
           "type": "timeseries",
@@ -333,8 +350,8 @@ data:
           "id": 6,
           "gridPos": {
             "h": 8,
-            "w": 12,
-            "x": 12,
+            "w": 8,
+            "x": 16,
             "y": 9
           },
           "fieldConfig": {
@@ -363,6 +380,54 @@ data:
             {
               "expr": "sum by (operation) (rate(service_errors_resource_exhausted[5m]))",
               "legendFormat": "{{operation}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "description": "Server shedding load via rps/concurrency dynamic-config limits. Expected: 0. Any sustained value = raise limits or scale the role. Alert: TemporalResourceExhausted."
+        },
+        {
+          "type": "stat",
+          "id": 37,
+          "title": "Workflows running",
+          "description": "Workflows currently running, from visibility CountWorkflowExecutions \u2014 published as pavo_running_workflows by the intern app's pending-activity monitor (~60s cadence). max across app replicas. Temporal exports no native metric for this; empty until an intern build with the gauge is deployed. Shows No data (not a stale number) when the count RPC has failed for >5m (pavo_running_workflows_last_publish_timestamp_seconds).",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 9
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "none",
+            "graphMode": "area",
+            "textMode": "auto",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "targets": [
+            {
+              "expr": "max(pavo_running_workflows and (time() - pavo_running_workflows_last_publish_timestamp_seconds < 300))",
+              "legendFormat": "running",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
@@ -430,7 +495,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Per-API request load on the frontend. Idle baseline is a few req/s from Temporal's internal system workers."
         },
         {
           "type": "timeseries",
@@ -495,11 +561,12 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Fraction of gRPC requests failing across all APIs. Expect ~0. Alert at >5% for 10m (our convention)."
         },
         {
           "type": "timeseries",
-          "title": "Sync match rate (tasks matched without persistence)",
+          "title": "Sync match rate \u2014 workflow vs activity",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -536,15 +603,25 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(poll_success_sync[5m])) / sum(rate(poll_success[5m]))",
-              "legendFormat": "sync match ratio",
+              "expr": "sum(rate(poll_success_sync{task_type=\"Workflow\"}[5m])) / sum(rate(poll_success{task_type=\"Workflow\"}[5m]))",
+              "legendFormat": "workflow",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
               }
+            },
+            {
+              "expr": "sum(rate(poll_success_sync{task_type=\"Activity\"}[5m])) / sum(rate(poll_success{task_type=\"Activity\"}[5m]))",
+              "legendFormat": "activity",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
             }
-          ]
+          ],
+          "description": "Share of tasks handed directly to a waiting poller, skipping a persistence write. Scaling-blog target: >= 0.99 for both workflow and activity. Low = pollers scarce -> extra DB load and latency."
         },
         {
           "type": "timeseries",
@@ -608,7 +685,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Tasks arriving on a queue nobody polls \u2014 the wrong-task-queue-name failure mode; invisible to every other metric (schedule-to-start only records on pickup). Expected: 0. Alert: TemporalTaskQueueNoPollers."
         },
         {
           "type": "timeseries",
@@ -656,7 +734,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Errors on internal RPCs between frontend/history/matching. Expected ~0; brief spikes during rollouts (membership churn) are normal."
         },
         {
           "type": "row",
@@ -672,7 +751,7 @@ data:
           "panels": [
             {
               "type": "timeseries",
-              "title": "Shard lock latency p99 (target < 1ms)",
+              "title": "Shard lock latency p95 / p99",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
@@ -680,7 +759,7 @@ data:
               "id": 14,
               "gridPos": {
                 "h": 8,
-                "w": 8,
+                "w": 6,
                 "x": 0,
                 "y": 35
               },
@@ -724,15 +803,25 @@ data:
               },
               "targets": [
                 {
-                  "expr": "histogram_quantile(0.99, sum by (le) (rate(lock_latency_bucket{operation=\"ShardInfo\"}[5m])))",
-                  "legendFormat": "p99",
+                  "expr": "histogram_quantile(0.95, sum by (le) (rate(lock_latency_bucket{operation=\"ShardInfo\"}[5m])))",
+                  "legendFormat": "p95",
                   "refId": "A",
                   "datasource": {
                     "type": "prometheus",
                     "uid": "prometheus"
                   }
+                },
+                {
+                  "expr": "histogram_quantile(0.99, sum by (le) (rate(lock_latency_bucket{operation=\"ShardInfo\"}[5m])))",
+                  "legendFormat": "p99",
+                  "refId": "B",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  }
                 }
-              ]
+              ],
+              "description": "SLO: p95 < 1ms (internal \u2014 stricter than the scaling blog's 'under 5ms, ideally ~1ms'). Time to acquire a history shard lock; sustained rise = shard contention (shard count frozen at cluster create). Pager alert deliberately at p99 > 5ms \u2014 a healthy cell runs ~1ms p99, alerting at the SLO would flap."
             },
             {
               "type": "timeseries",
@@ -744,8 +833,8 @@ data:
               "id": 15,
               "gridPos": {
                 "h": 8,
-                "w": 8,
-                "x": 8,
+                "w": 6,
+                "x": 6,
                 "y": 35
               },
               "fieldConfig": {
@@ -789,7 +878,8 @@ data:
                     "uid": "prometheus"
                   }
                 }
-              ]
+              ],
+              "description": "queue = end-to-end task latency from creation to completion (includes waits and retries); processing = single-attempt execution. Widening gap between them = tasks spending time waiting/retrying \u2014 history falling behind."
             },
             {
               "type": "timeseries",
@@ -801,8 +891,8 @@ data:
               "id": 16,
               "gridPos": {
                 "h": 8,
-                "w": 8,
-                "x": 16,
+                "w": 6,
+                "x": 12,
                 "y": 35
               },
               "fieldConfig": {
@@ -841,6 +931,71 @@ data:
                   "expr": "sum(rate(sharditem_removed_count[5m]))",
                   "legendFormat": "removed",
                   "refId": "B",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  }
+                }
+              ],
+              "description": "Shard acquire/release churn. Expected: 0 in steady state; spikes only on history pod restart/scale. Sustained movement = ownership instability (lease contention)."
+            },
+            {
+              "type": "stat",
+              "id": 30,
+              "title": "Shards owned (target = numHistoryShards)",
+              "description": "History shards currently owned (native server gauge). Must equal the cell's numHistoryShards (temporal_history_shards var, default 128; frozen at cluster create). Lower = shards unowned (startup/rebalance in progress). Transiently reads high during a history pod roll: the old owner's series counts until its next scrape marks it stale while the new owner has already acquired the shards; settles within a scrape interval. Any sustained value other than numHistoryShards is wrong \u2014 cross-check shard movement and TemporalRoleUnavailable.",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 6,
+                "x": 18,
+                "y": 35
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "red",
+                        "value": null
+                      },
+                      {
+                        "color": "green",
+                        "value": 128
+                      },
+                      {
+                        "color": "red",
+                        "value": 129
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "justifyMode": "auto",
+                "orientation": "auto"
+              },
+              "targets": [
+                {
+                  "expr": "sum(numshards_gauge)",
+                  "legendFormat": "shards owned",
+                  "refId": "A",
                   "datasource": {
                     "type": "prometheus",
                     "uid": "prometheus"
@@ -909,7 +1064,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Latency of Temporal->RDS operations. Expect low tens of ms per op (our convention \u2014 docs give no number). Sustained rise = DB pressure. RDS host CPU/credits/storage are CloudWatch-only; they surface here first as latency."
         },
         {
           "type": "timeseries",
@@ -957,7 +1113,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "DB operation rate. Scales with state transitions; also rises when sync match rate drops (every miss = extra persistence round-trip)."
         },
         {
           "type": "timeseries",
@@ -1005,7 +1162,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Expected: 0. Any sustained errors = RDS trouble (connections/storage/timeouts). Alert: TemporalPersistenceErrors (critical)."
         },
         {
           "type": "row",
@@ -1071,6 +1229,55 @@ data:
         },
         {
           "type": "timeseries",
+          "description": "Occupied concurrency slots across intern worker pods, split workflow vs activity (orchestrator-task-queue; LocalActivityWorker omitted \u2014 unused). Ceiling = max_concurrent_workflow_tasks / max_concurrent_activities x pods; pinned at ceiling while slots-available=0 = pool saturated, schedule-to-start rises.",
+          "title": "Worker task slots used",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "id": 31,
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 53
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (worker_type) (temporal_worker_task_slots_used{task_queue=\"orchestrator-task-queue\", worker_type!=\"LocalActivityWorker\"})",
+              "legendFormat": "{{worker_type}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
           "description": "Intern SDK workers only (orchestrator-task-queue); the Temporal server's system workers emit the same metric names and are excluded. Expect spikes on injected/real activity failures, heartbeat timeouts after pod loss, and cancellations.",
           "title": "Workflow task execution failures /s",
           "datasource": {
@@ -1081,7 +1288,7 @@ data:
           "gridPos": {
             "h": 8,
             "w": 8,
-            "x": 8,
+            "x": 16,
             "y": 53
           },
           "fieldConfig": {
@@ -1129,7 +1336,7 @@ data:
         },
         {
           "type": "timeseries",
-          "description": "Share of intern workflow tasks served from the sticky cache (no history replay), orchestrator-task-queue only — the Temporal server's own system workers emit the same metric names and are excluded. SDK core registers the miss counter lazily, so `temporal_sticky_cache_miss` is absent until the first miss; the `or vector(0)` guard keeps the ratio defined (1.0) until then. Absent (NaN) while no workflow tasks run.",
+          "description": "Hit = workflow task served from the sticky cache; miss = replay from full history -> extra history-service load. Expect >0.9 steady (our convention \u2014 docs give no number). The `or vector(0)` guards the miss counter: Core SDK registers it lazily, so the ratio would pin at 1.0 until the first miss. task_queue filter excludes server system workers, which emit the same metric names.",
           "title": "Sticky cache hit ratio",
           "datasource": {
             "type": "prometheus",
@@ -1139,8 +1346,8 @@ data:
           "gridPos": {
             "h": 8,
             "w": 8,
-            "x": 16,
-            "y": 53
+            "x": 0,
+            "y": 61
           },
           "fieldConfig": {
             "defaults": {
@@ -1179,7 +1386,56 @@ data:
         },
         {
           "type": "timeseries",
-          "description": "Cache removals that are not a clean workflow completion: cache full, cache miss, task-not-found, unhandled command, non-determinism. The evicted workflow replays its full history on its next task. Expect spikes on worker-pod loss and on cancellation — a sustained rate with neither is the anomaly. The counter carries no reason label; check worker logs for the cause. orchestrator-task-queue only — the Temporal server's own system workers (temporal_sys_* queues) evict constantly and are excluded. Absent until the first intern eviction.",
+          "description": "Workflows held in each worker pod's sticky cache. Ceiling = max_cached_workflows. Near ceiling + forced evictions >0 = cache thrash (full history replays) \u2014 raise max_cached_workflows and pod memory together. NOTE: workflow_active_thread_count is a Java-SDK-only metric; the Python/Core SDK does not emit it.",
+          "title": "Sticky cache size (workflows cached)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "id": 32,
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 61
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (pod) (temporal_sticky_cache_size{task_queue=\"orchestrator-task-queue\"})",
+              "legendFormat": "{{pod}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "description": "Cache removals that are not a clean workflow completion: cache full, cache miss, task-not-found, unhandled command, non-determinism. The evicted workflow replays its full history on its next task. Expect spikes on worker-pod loss and on cancellation \u2014 a sustained rate with neither is the anomaly. The counter carries no reason label; check worker logs for the cause. orchestrator-task-queue only \u2014 the Temporal server's own system workers (temporal_sys_* queues) evict constantly and are excluded. Absent until the first intern eviction.",
           "title": "Sticky cache forced evictions (5m increase)",
           "datasource": {
             "type": "prometheus",
@@ -1189,7 +1445,7 @@ data:
           "gridPos": {
             "h": 8,
             "w": 8,
-            "x": 0,
+            "x": 16,
             "y": 61
           },
           "fieldConfig": {
@@ -1241,7 +1497,7 @@ data:
         },
         {
           "type": "timeseries",
-          "title": "CPU by pod (cores)",
+          "title": "CPU \u2014 % of request / limit",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1255,7 +1511,7 @@ data:
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "short",
+              "unit": "percentunit",
               "custom": {
                 "drawStyle": "line",
                 "lineWidth": 1,
@@ -1277,19 +1533,29 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~\"temporal-(frontend|history|matching|worker|web)-.*\", container!=\"\"}[5m]))",
-              "legendFormat": "{{pod}}",
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~\"$pods\", container!=\"\", container!=\"POD\"}[5m])) / on (pod) sum by (pod) (kube_pod_container_resource_requests{resource=\"cpu\", pod=~\"$pods\"})",
+              "legendFormat": "{{pod}} vs request",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus"
               }
+            },
+            {
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~\"$pods\", container!=\"\", container!=\"POD\"}[5m])) / on (pod) sum by (pod) (kube_pod_container_resource_limits{resource=\"cpu\", pod=~\"$pods\"})",
+              "legendFormat": "{{pod}} vs limit",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
             }
-          ]
+          ],
+          "description": "CPU usage relative to k8s requests and limits. Server pods intentionally have NO cpu limit (avoids CFS throttling per Temporal k8s tuning guide) so only 'vs request' exists for them; >100% of request is fine briefly, sustained >>100% = raise requests (scheduling/eviction risk). intern workers have a 2-cpu limit."
         },
         {
           "type": "timeseries",
-          "title": "Memory working set by pod",
+          "title": "Memory \u2014 % of request / limit",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1303,7 +1569,7 @@ data:
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "bytes",
+              "unit": "percentunit",
               "custom": {
                 "drawStyle": "line",
                 "lineWidth": 1,
@@ -1325,8 +1591,114 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (pod) (container_memory_working_set_bytes{pod=~\"temporal-(frontend|history|matching|worker|web)-.*\", container!=\"\"})",
+              "expr": "sum by (pod) (container_memory_working_set_bytes{pod=~\"$pods\", container!=\"\", container!=\"POD\"}) / on (pod) sum by (pod) (kube_pod_container_resource_requests{resource=\"memory\", pod=~\"$pods\"})",
+              "legendFormat": "{{pod}} vs request",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            },
+            {
+              "expr": "sum by (pod) (container_memory_working_set_bytes{pod=~\"$pods\", container!=\"\", container!=\"POD\"}) / on (pod) sum by (pod) (kube_pod_container_resource_limits{resource=\"memory\", pod=~\"$pods\"})",
+              "legendFormat": "{{pod}} vs limit",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ],
+          "description": "Working set relative to requests and limits. Server pods run limit == request (our convention \u2014 deterministic OOM behavior; general k8s practice, not from the tuning blog). Near 100% of limit = OOMKill risk; raise both together."
+        },
+        {
+          "type": "timeseries",
+          "description": "Fraction of CFS periods throttled. Expect 0 for temporal server pods (no CPU limit, per the tuning blog). intern workers (2-CPU limit) may throttle under load \u2014 sustained >20% (our convention) = raise the limit.",
+          "title": "CPU throttling ratio by pod",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "id": 33,
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 70
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{container!=\"\", container!=\"POD\", pod=~\"$pods\"}[5m])) / sum by (pod) (rate(container_cpu_cfs_periods_total{container!=\"\", container!=\"POD\", pod=~\"$pods\"}[5m]))",
               "legendFormat": "{{pod}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 34,
+          "title": "GOMAXPROCS by service",
+          "description": "Go runtime parallelism per role, from the server's runtime reporter. Go 1.25+ is natively cgroup-aware: GOMAXPROCS follows the CPU limit when set (requests are ignored); with no limit it equals node cores (8 here). Tuning blog: pin ~= CPU request if node contention appears.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 78
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          },
+          "targets": [
+            {
+              "expr": "max by (type) (gomaxprocs{type=~\"frontend|history|matching|worker\"})",
+              "legendFormat": "{{type}}",
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
@@ -1346,8 +1718,8 @@ data:
           "gridPos": {
             "h": 8,
             "w": 8,
-            "x": 16,
-            "y": 70
+            "x": 8,
+            "y": 78
           },
           "fieldConfig": {
             "defaults": {
@@ -1373,7 +1745,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{pod=~\"temporal-(frontend|history|matching|worker|web)-.*\"}[1h]))",
+              "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{pod=~\"$pods\"}[1h]))",
               "legendFormat": "{{pod}}",
               "refId": "A",
               "datasource": {
@@ -1381,7 +1753,8 @@ data:
                 "uid": "prometheus"
               }
             }
-          ]
+          ],
+          "description": "Expected: 0. Correlate any restarts with memory panel (OOMKill) and exit codes."
         }
       ]
     }
