@@ -4,8 +4,8 @@
 # now so the allowlist is already correct when enforcement is turned on.
 #
 # ⚠️ BEFORE ENABLING CNI ENFORCEMENT, reconcile the app-scrape rule below: its
-# hardcoded metrics-port list {8000,8080,8081,8082} is coupled to each scraped
-# app's service.port. A new/changed scraped service on a port not listed here
+# hardcoded metrics-port list is coupled to each scraped app's service.port.
+# A new/changed scraped service on a port not listed there
 # would be silently dropped once enforcement is on — the exact failure this rule
 # closes. (Same reconcile bucket as the prometheus.io/port app-chart follow-up.)
 #
@@ -49,6 +49,16 @@ spec:
               app: pavo-es-exporter
       ports:
         - { protocol: TCP, port: 9114 }
+    # Temporal server roles (temporal_mode=self_hosted) expose :9090 — label-pinned
+    # like the ES exporter, not any pod on 9090.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: temporal
+              app.kubernetes.io/instance: temporal
+      ports:
+        - { protocol: TCP, port: 9090 }
     # Scrape app /metrics (the near-term app-metrics path). Prometheus's
     # kubernetes-pods job scrapes prometheus.io/scrape-annotated app pods in the
     # instance namespace on their http port. NetworkPolicy can't match an
@@ -62,6 +72,7 @@ spec:
         - { protocol: TCP, port: 8080 } # api-gateway, onboarding-copy
         - { protocol: TCP, port: 8081 } # exec-runner
         - { protocol: TCP, port: 8082 } # capability-proxy
+        - { protocol: TCP, port: 9000 } # intern-temporal-workers (SDK metrics)
         - { protocol: TCP, port: 10254 } # ingress-nginx controller metrics (edge RED)
 %{ if pavo_webhook_cidr != "" ~}
 ---
