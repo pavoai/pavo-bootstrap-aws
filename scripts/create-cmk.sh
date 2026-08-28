@@ -11,7 +11,7 @@
 # That is sufficient whenever the workload + ESO roles live in the SAME account
 # (all dev/test cells, e.g. awstest): their IAM policies grant key use, so NO
 # key-policy statements are needed. For a LOCKED-DOWN customer key that does not
-# delegate to account root, do NOT use this script — follow the 5-statement key
+# delegate to account root, do NOT use this script — follow the 8-statement key
 # policy in RUNBOOKS.md "Setting up the CMK".
 #
 # Idempotent via the alias `alias/pavo-<name>`: re-running adopts the existing key.

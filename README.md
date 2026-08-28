@@ -136,6 +136,36 @@ silently ignored and Terraform defaults to local state. Verify init output reads
   principal; for a cross-account child-module run it is `k8s_get_token_role_arn`.
   If it doesn't have access, see the *Authorization: create + verify* recipe below
   (cross-account) or [RUNBOOKS.md → Case B](RUNBOOKS.md#case-b-bootstrapping-without-k8s-admin) (direct apply).
+- **EC2 describe permissions for gateway-endpoint discovery.** Since v0.6.1 the
+  module discovers Omnistrate's existing S3/DynamoDB gateway endpoints with a
+  live describe, so it only fills gaps instead of colliding
+  (`RouteAlreadyExists`). A data source cannot grant its own permission, so
+  these must be in place **before the plan runs**:
+
+  ```json
+  {
+    "Effect": "Allow",
+    "Action": ["ec2:DescribeVpcEndpoints", "ec2:DescribeRouteTables"],
+    "Resource": "*"
+  }
+  ```
+
+  Verify by exercising the real calls with the same credentials Terraform will
+  use:
+
+  ```bash
+  aws ec2 describe-vpc-endpoints --max-items 1 --region <REGION> >/dev/null \
+    && aws ec2 describe-route-tables --max-items 1 --region <REGION> >/dev/null \
+    && echo OK
+  ```
+
+  `Resource: "*"` is inherent to these EC2 describe actions: they do not support
+  resource-level permissions, and both are read-only.
+
+  > **v0.6.0 only:** that release discovered endpoints through the Resource
+  > Groups Tagging API and needed `tag:GetResources`. v0.6.1 replaced it with
+  > the describe calls above, so `tag:GetResources` is **no longer required**
+  > and can be dropped if you added it for v0.6.0.
 
 Run **`scripts/preflight.sh`** before `terraform init`. It **requires a mode**:
 
@@ -214,6 +244,27 @@ the trailing `/<session-name>` and replace
 
 The `variables.tf` validation rejects assumed-role ARN shapes with a clear
 error message that shows how to convert a session ARN to the role ARN.
+
+## Before you apply: decide these inputs
+
+Answer these before the first `terraform apply`. Each one has cost a real
+onboarding hours, and none of them surfaces as a clear error at the time you get
+it wrong.
+
+These are two **independent** questions. How the key was created decides whether
+the tag is present; whether its key policy delegates to account root decides
+whether explicit key-policy statements are needed. Answer both.
+
+| Question | If yes, set | If you get it wrong |
+|---|---|---|
+| Are you using a customer-managed KMS key? | `cell_kms_key_arn = <key ARN>` | Required whenever this cell encrypts EBS with your own key. See [RUNBOOKS.md → Setting up the CMK](RUNBOOKS.md#setting-up-the-cmk-separate-from-bootstrap-before-workload-deploys). |
+| Did you create that CMK **by hand** rather than with `scripts/create-cmk.sh`? | Tag it `omnistrate.com/customer-managed-kms=true`. | EBS volumes are created and then deleted seconds later. PVCs hang `Pending` forever **with no Terraform error** — the apply just times out on a Helm wait. This took hours to diagnose on a real onboarding. |
+| Does that key's policy **not** delegate to account root? | Add the explicit statements from [RUNBOOKS.md → Explicit key policy](RUNBOOKS.md#explicit-key-policy-customer-governed-keys). | The EBS CSI driver and the workload/ESO roles cannot reach the key at all, because IAM alone cannot grant access to a key whose policy does not delegate to root. |
+
+A hand-created key that **does** delegate to root (the AWS default) needs only
+the tag; IAM handles the rest. `scripts/create-cmk.sh` applies the tag for you,
+and the hand-created path does not, which is the single most common way this
+goes wrong.
 
 ## Apply
 

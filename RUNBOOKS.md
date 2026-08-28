@@ -57,11 +57,14 @@ things** because the EBS CSI driver's role must be allowed to use your key:
    described in *Reconciling an already-onboarded account* below — `CreateGrant`
    is the action the driver needs to hand the grant to EBS at attach time.
 3. **Only for locked-down keys** — if your key policy does **not** delegate to the
-   account root, add a key-policy statement naming the **Omnistrate-managed
-   EBS-CSI driver role** with the same KMS actions. If the key policy delegates
-   to root (the default), the IAM side alone is enough and no key-policy edit is
-   needed. The driver runs as the Omnistrate-owned role (not a Pavo role) — get
-   its exact ARN from the cell:
+   account root, the key policy itself must name the **Omnistrate-managed EBS-CSI
+   driver role**. Use the `AllowEBSCSICryptographicUse` and
+   `AllowEBSCSIGrantManagement` statements from
+   [*Explicit key policy (customer-governed keys)*](#explicit-key-policy-customer-governed-keys)
+   below — they are already part of that policy, so there is nothing extra to
+   author here. If the key policy delegates to root (the default), the IAM side
+   alone is enough and no key-policy edit is needed. The driver runs as the
+   Omnistrate-owned role (not a Pavo role) — get its exact ARN from the cell:
    ```bash
    kubectl -n kube-system get sa ebs-csi-controller-sa \
      -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}'
@@ -381,6 +384,67 @@ Get `<org>` + the exact template URL from the account config's `cloudformation_u
 stack update** that refreshes the EBS-CSI KMS permissions for customer-CMK volumes
 (*Customer-managed-key EBS volumes* above) — one mechanism, several triggers.
 
+#### The stack name is per-account — do not hardcode it
+
+It is commonly `AccountConfigSetup`, but customers prefix it (a real one is
+`PavoPOC-AccountConfigSetup`). Any command that hardcodes the bare name fails
+for them. Discover it:
+
+```bash
+aws cloudformation list-stacks --region <REGION> \
+  --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
+                        UPDATE_ROLLBACK_FAILED ROLLBACK_COMPLETE \
+  --query "StackSummaries[?contains(StackName,'AccountConfigSetup')].[StackName,StackStatus]" \
+  --output text
+```
+
+The status filter matters: `list-stacks` returns deleted stacks for 90 days, so
+an unfiltered name-only query can hand you a `DELETE_COMPLETE` stack from a
+previous onboarding attempt.
+
+#### Never re-run with a *different* `CreateLoadBalancerPolicy` than Phase 1 used
+
+This is why "keep existing parameters" above matters, and it is the single most
+common way this update fails. `CreateLoadBalancerPolicy` defaults to `true` and
+gates a `ManagedPolicyName: AWSLoadBalancerControllerIAMPolicy` resource. An
+account onboarded with `false` (because it manages that policy separately)
+already has a policy of that name, so re-running with the default produces:
+
+```text
+A policy called AWSLoadBalancerControllerIAMPolicy already exists.
+Duplicate names are not allowed. (Service: Iam, Status Code: 409)
+```
+
+and CloudFormation rolls the whole update back. **Whatever value Phase 1 used,
+every subsequent update must use the same value.** Passing
+`UsePreviousValue: true` for every parameter, as above, does this automatically;
+hand-written `ParameterValue=` lists are what get it wrong.
+
+##### Break-glass: recovering a rolled-back stack
+
+Only if the stack is already stuck in `UPDATE_ROLLBACK_FAILED`. This leaves
+CloudFormation's model out of sync with reality, so it is a recovery path, not
+part of the normal procedure.
+
+First confirm the LB policy is genuinely the blocker rather than assuming it:
+
+```bash
+aws cloudformation describe-stack-events --stack-name <STACK> --region <REGION> \
+  --query "StackEvents[?ResourceStatus=='CREATE_FAILED'].[LogicalResourceId,ResourceStatusReason]" \
+  --output text | head
+```
+
+If, and only if, `AWSLoadBalancerControllerIAMPolicy` is the failing resource:
+
+```bash
+aws cloudformation continue-update-rollback --stack-name <STACK> --region <REGION> \
+  --resources-to-skip AWSLoadBalancerControllerIAMPolicy
+```
+
+Then re-run the update **with `CreateLoadBalancerPolicy` set to the value Phase 1
+used** (normally `false` for any account that hit this), or with
+`UsePreviousValue: true`.
+
 ### Migrating existing customers when boundary changes
 
 Customers who applied this module **before** the EFS tag-scoping change need a
@@ -632,7 +696,7 @@ below** — it applies only to a customer key that does not delegate to root.
 Use this when key access must be granted by the **key policy itself** — naming
 the workload + ESO roles — rather than left to account-root + IAM (e.g. an org
 that gates KMS at the key policy, or a key whose principals you want pinned
-regardless of IAM). The 5-statement policy below keeps `EnableRootPermissions`
+regardless of IAM). The 8-statement policy below keeps `EnableRootPermissions`
 (root → `kms:*`) so the account never loses the recovery path, and **adds** the
 explicit workload/ESO grants on top:
 
@@ -648,14 +712,41 @@ explicit workload/ESO grants on top:
    this ESO role ARN as principals. Without the ESO principal, ESO cannot
    decrypt the RDS-managed secret at runtime.
 
-2. Create a KMS key in your AWS account (or reuse an existing one).
+2. Create a **dedicated** KMS key for this cell, then **tag it**:
 
-3. Attach this **5-statement key policy** (with `<CUSTOMER_ACCOUNT_ID>`,
-   `<OMNISTRATE_WORKLOAD_ROLE_ARN>`, `<ESO_ROLE_ARN_FROM_BOOTSTRAP>`, and
-   `<REGION>` substituted):
+   ```bash
+   aws kms tag-resource --region <REGION> --key-id <KEY_ID> \
+     --tags TagKey=omnistrate.com/customer-managed-kms,TagValue=true
+   ```
+
+   Prefer a dedicated key over an existing shared enterprise key. This flow
+   grants the EBS CSI driver role cryptographic use of whatever key you name,
+   so a dedicated key keeps that blast radius small.
+
+   **The tag is not optional.** It is easy to miss because `scripts/create-cmk.sh`
+   applies it for you on the quick-setup path, while this hand-created path does
+   not. Omnistrate's EBS CSI driver role scopes `kms:CreateGrant` to keys
+   carrying this tag. Without it the driver cannot encrypt the self-hosted
+   Elasticsearch or in-VPC observability volumes: each volume is created and
+   then deleted seconds later, and the PVC stays `Pending` forever **with no
+   error surfaced in Terraform** — the apply simply times out on a Helm wait.
+
+   Verify before continuing:
+
+   ```bash
+   aws kms list-resource-tags --region <REGION> --key-id <KEY_ID> \
+     --query "Tags[?TagKey=='omnistrate.com/customer-managed-kms' && TagValue=='true']"
+   ```
+
+3. Attach this **8-statement key policy** (with `<CUSTOMER_ACCOUNT_ID>`,
+   `<OMNISTRATE_WORKLOAD_ROLE_ARN>`, `<ESO_ROLE_ARN_FROM_BOOTSTRAP>`,
+   `<EBS_CSI_DRIVER_ROLE_ARN>`, and `<REGION>` substituted):
 
    ```json
-   [
+   {
+     "Version": "2012-10-17",
+     "Id": "pavo-cell-cmk",
+     "Statement": [
      {
        "Sid": "EnableRootPermissions",
        "Effect": "Allow",
@@ -704,9 +795,81 @@ explicit workload/ESO grants on top:
            "kms:ViaService": "secretsmanager.<REGION>.amazonaws.com"
          }
        }
+     },
+     {
+       "Sid": "AllowEBSCSICryptographicUseViaEC2",
+       "Effect": "Allow",
+       "Principal": { "AWS": "<EBS_CSI_DRIVER_ROLE_ARN>" },
+       "Action": [
+         "kms:Encrypt",
+         "kms:Decrypt",
+         "kms:ReEncrypt*",
+         "kms:GenerateDataKey*"
+       ],
+       "Resource": "*",
+       "Condition": {
+         "StringEquals": {
+           "kms:ViaService": "ec2.<REGION>.amazonaws.com"
+         }
+       }
+     },
+     {
+       "Sid": "AllowEBSCSIDescribeKey",
+       "Effect": "Allow",
+       "Principal": { "AWS": "<EBS_CSI_DRIVER_ROLE_ARN>" },
+       "Action": "kms:DescribeKey",
+       "Resource": "*"
+     },
+     {
+       "Sid": "AllowEBSCSIGrantManagement",
+       "Effect": "Allow",
+       "Principal": { "AWS": "<EBS_CSI_DRIVER_ROLE_ARN>" },
+       "Action": ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"],
+       "Resource": "*",
+       "Condition": {
+         "Bool": { "kms:GrantIsForAWSResource": "true" }
+       }
      }
-   ]
+     ]
+   }
    ```
+
+   The last three statements are what let the EBS CSI driver encrypt the
+   self-hosted Elasticsearch and in-VPC observability volumes with this key.
+   They follow AWS's documented shape for customer-managed keys with the EBS
+   CSI driver: cryptographic operations and grant management are separate
+   statements, and grant management is constrained with
+   `kms:GrantIsForAWSResource` so the driver can only hand grants to AWS
+   services, never to arbitrary principals. This mirrors
+   `AllowOmnistrateWorkloadGrants` above, which already uses that condition.
+
+   The three-way split is deliberate:
+
+   - **Cryptographic actions carry `kms:ViaService = ec2.<REGION>.amazonaws.com`.**
+     A key-policy statement naming a principal directly is sufficient on its own
+     for a same-account principal, so without this condition it would grant
+     broader use of the key than the driver role's own IAM policy allows. This
+     keeps the key policy consistent with the ViaService scoping described under
+     *Customer-managed-key EBS volumes* above.
+   - **`kms:DescribeKey` is separate and unconditioned**, because the driver
+     calls it directly rather than through EC2, so a ViaService condition would
+     deny it.
+   - **Grant management must NOT carry `kms:ViaService`.** The driver calls
+     `kms:CreateGrant` directly; adding the condition would deny grant creation
+     and volumes would never attach. `kms:GrantIsForAWSResource` is the correct
+     constraint there.
+
+   Discover `<EBS_CSI_DRIVER_ROLE_ARN>` from the cluster:
+
+   ```bash
+   kubectl -n kube-system get sa ebs-csi-controller-sa \
+     -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}'
+   # -> arn:aws:iam::<acct>:role/omnistrate-ebs-csi-driver-<cell>-<hash>
+   ```
+
+   Omit both statements only if this key will never back an encrypted EBS
+   volume, i.e. the cell runs neither self-hosted Elasticsearch nor in-VPC
+   observability.
 
 4. Paste the CMK ARN into the Omnistrate UI under `cell_kms_key_arn`. The
    instance won't provision until set (`required: true`).
