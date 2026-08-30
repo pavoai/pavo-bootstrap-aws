@@ -356,3 +356,44 @@ serverFiles:
               severity: warning
             annotations:
               summary: "Temporal tasks arriving on task queue {{ $labels.taskqueue }} with no pollers — worker missing or polling a wrong queue name; workflows hang silently"
+      # Workload health. Deliberately generic: these two rules watch every
+      # Deployment and container in the instance namespace rather than naming
+      # services, so a workload added later is covered without touching this
+      # file. They are the backstop for the failure mode that cost us most of
+      # 2026-08-28: config is wrong, the release still reports success, and the
+      # damage only becomes visible when something recreates a Pod.
+      #
+      # Both rules read kube-state-metrics (scraped by the job above).
+      # StatefulSets are intentionally not covered — the only one on a cell is
+      # Elasticsearch, which has its own health alerts in the group above.
+      - name: workloads
+        rules:
+          # Fires whether the cause is a bad image, a failing probe, unschedulable
+          # Pods, or a Pod that cannot start because its config is wrong. 15m is
+          # long enough that an ordinary rolling update completes underneath it.
+          - alert: DeploymentReplicasUnavailable
+            expr: |
+              sum by (namespace, deployment) (kube_deployment_status_replicas_available{namespace=~"instance-.*"})
+                < sum by (namespace, deployment) (kube_deployment_spec_replicas{namespace=~"instance-.*"})
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has fewer available replicas than desired for 15m — bad config, failing probe, or unschedulable Pods"
+          # Caught separately from the rule above because a Deployment can sit at
+          # its desired replica count while extra Pods crash-loop behind it — an
+          # HPA scale-up into a broken config looks healthy by replica count alone.
+          # Init containers are included: both charts gate startup on one
+          # (run-migrations, fix-permissions), and a Pod wedged there never
+          # reaches its app container, so the non-init metric alone would miss it.
+          - alert: ContainerCrashLooping
+            expr: |
+              sum by (namespace, pod, container) (
+                kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff", namespace=~"instance-.*"}
+                or kube_pod_init_container_status_waiting_reason{reason="CrashLoopBackOff", namespace=~"instance-.*"}
+              ) > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Container {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }} is in CrashLoopBackOff — it cannot start with its current image or config"
