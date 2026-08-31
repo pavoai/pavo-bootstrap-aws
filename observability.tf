@@ -21,6 +21,21 @@ locals {
   obs_count = var.enable_observability ? 1 : 0
   obs_ns    = "pavo-observability"
 
+  # The cluster's Service CIDR, selected by IP family. The observability egress
+  # NetworkPolicy needs it so in-cluster clients can reach the Kubernetes API at
+  # its Service ClusterIP (KUBERNETES_SERVICE_HOST), which is NOT in the VPC CIDR.
+  #
+  # ip_family matters: on an IPv6 cluster `service_ipv4_cidr` is empty, and an
+  # empty value would render `cidr: ` into the policy — either rejected on apply
+  # or, worse, an ipBlock that matches nothing, silently restoring the outage
+  # this exists to prevent. All Omnistrate-provisioned cells are ipv4 today; this
+  # keeps the template honest if that ever changes.
+  cell_service_cidr = local.obs_count == 1 ? (
+    try(data.aws_eks_cluster.primary.kubernetes_network_config[0].ip_family, "ipv4") == "ipv6"
+    ? data.aws_eks_cluster.primary.kubernetes_network_config[0].service_ipv6_cidr
+    : data.aws_eks_cluster.primary.kubernetes_network_config[0].service_ipv4_cidr
+  ) : ""
+
   # Pavo alert leg (sanitizer + its route). Off unless explicitly enabled AND a
   # real signed image digest is provided — the cell ClusterImagePolicy admits only
   # the signed digest, so there is nothing to deploy until the signing build runs.
@@ -408,8 +423,35 @@ resource "kubectl_manifest" "obs_support_role" {
 # Staged egress NetworkPolicies (inert until CNI network-policy enforcement is on).
 data "kubectl_file_documents" "obs_netpol" {
   count = local.obs_count
+
+  # An empty Service CIDR would render `cidr: ` into the egress policy. That is
+  # the dangerous failure here, not a loud one: it produces a policy that applies
+  # but matches nothing, which is exactly how kube-state-metrics ended up unable
+  # to reach the API for 25 days without a single alert. Fail the plan instead.
+  lifecycle {
+    precondition {
+      condition     = local.cell_service_cidr != ""
+      error_message = <<-EOT
+        Could not determine the Service CIDR for cell ${var.eks_cluster_name}, so
+        the observability egress NetworkPolicy cannot allow in-cluster clients to
+        reach the Kubernetes API at its Service ClusterIP.
+
+        kubernetes_network_config returned neither service_ipv4_cidr nor
+        service_ipv6_cidr for the cluster's ip_family. Check:
+          aws eks describe-cluster --name ${var.eks_cluster_name} \
+            --query 'cluster.kubernetesNetworkConfig'
+      EOT
+    }
+  }
   content = templatefile("${path.module}/observability/manifests/netpol.yaml.tftpl", {
-    vpc_cidr            = data.aws_vpc.cell[0].cidr_block
+    vpc_cidr = data.aws_vpc.cell[0].cidr_block
+    # Read from the cluster rather than hardcoded: EKS picks 10.100.0.0/16 or
+    # 172.20.0.0/16 depending on whether the VPC CIDR collides, so a literal
+    # would be wrong on some cells and silently reintroduce the outage this
+    # fixes. Selected by ip_family — on an IPv6 cluster service_ipv4_cidr is
+    # empty, which would render `cidr: ` and produce a NetworkPolicy that either
+    # fails to apply or silently omits API access. See local.cell_service_cidr.
+    service_cidr        = local.cell_service_cidr
     pavo_webhook_cidr   = var.pavo_webhook_cidr
     customer_alert_cidr = var.customer_alert_cidr
   })

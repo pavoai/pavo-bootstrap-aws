@@ -34,10 +34,31 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: pavo-observability
-    # k8s API — Grafana sidecar watches ConfigMaps; Prometheus SD lists endpoints.
-    # The API server ENI lives in the VPC, so the VPC CIDR covers it (in-VPC only).
+    # k8s API — Grafana sidecar watches ConfigMaps; Prometheus SD lists endpoints;
+    # kube-state-metrics lists every object type it exports.
+    #
+    # TWO CIDRs are required, and omitting the second one broke kube-state-metrics
+    # for 25 days. In-cluster clients do NOT dial the API server's ENI. client-go
+    # reads KUBERNETES_SERVICE_HOST, which is the `kubernetes` Service ClusterIP
+    # (10.100.0.1), and that address lives in the cluster's SERVICE CIDR, not the
+    # VPC CIDR. NetworkPolicy is evaluated against that destination, so a
+    # VPC-CIDR-only rule permits the endpoint IP nobody dials and denies the
+    # ClusterIP everybody dials.
+    #
+    # It failed quietly. kube-state-metrics exits on the error and CrashLoopBackOffs,
+    # taking every kube_* series with it — so DeploymentReplicasUnavailable and
+    # ContainerCrashLooping stop firing rather than alerting, because their
+    # expressions then compare empty vectors. The monitoring cannot report that the
+    # monitoring is down.
+    #
+    # Long-lived clients hid it. A pod that opens its API watches before the policy
+    # agent programs its rules keeps those connections through conntrack, so
+    # Prometheus kept working while kube-state-metrics — which re-dials on every
+    # container restart — never recovered. Do not conclude from "Prometheus is fine"
+    # that API egress is fine.
     - to:
         - ipBlock: { cidr: ${vpc_cidr} }
+        - ipBlock: { cidr: ${service_cidr} }
       ports:
         - { protocol: TCP, port: 443 }
     # Scrape ONLY the ES exporter pods, wherever the instance namespace lands
