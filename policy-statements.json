@@ -36,12 +36,6 @@
     ]
   },
   {
-    "sid": "ElastiCacheConnectWorkload",
-    "effect": "Allow",
-    "actions": ["elasticache:Connect"],
-    "resources": ["arn:aws:elasticache:*:*:replicationgroup:pavo-*"]
-  },
-  {
     "sid": "ElastiCacheMutatingPavoResources",
     "scope": "runner",
     "effect": "Allow",
