@@ -258,19 +258,55 @@ variable "customer_alert_cidr" {
 }
 
 variable "observability_prometheus_chart_version" {
-  description = "Helm chart version for prometheus-community/prometheus."
+  description = <<-EOT
+    Helm chart version for prometheus-community/prometheus.
+
+    HOOK INVARIANT: the observability workloads run with wait = false so a
+    brand-new cell can apply before it has worker nodes. `wait = false` skips only
+    the readiness poll — Helm hook Jobs still block a release independently — so
+    that only holds while this chart renders NO `helm.sh/hook` resources. The
+    pinned default was audited and renders none.
+
+    Before changing this, render the chart with the values in observability/ and
+    confirm it still emits no hooks. A chart that introduces a hook Job silently
+    restores the fresh-cell apply failure this module removed.
+  EOT
   type        = string
   default     = "29.17.0"
 }
 
 variable "observability_grafana_chart_version" {
-  description = "Helm chart version for grafana/grafana."
+  description = <<-EOT
+    Helm chart version for grafana/grafana.
+
+    HOOK INVARIANT: the observability workloads run with wait = false so a
+    brand-new cell can apply before it has worker nodes. `wait = false` skips only
+    the readiness poll — Helm hook Jobs still block a release independently — so
+    that only holds while this chart renders NO `helm.sh/hook` resources. The
+    pinned default was audited and renders none.
+
+    Before changing this, render the chart with the values in observability/ and
+    confirm it still emits no hooks. A chart that introduces a hook Job silently
+    restores the fresh-cell apply failure this module removed.
+  EOT
   type        = string
   default     = "10.5.15"
 }
 
 variable "observability_otel_collector_chart_version" {
-  description = "Helm chart version for open-telemetry/opentelemetry-collector."
+  description = <<-EOT
+    Helm chart version for open-telemetry/opentelemetry-collector.
+
+    HOOK INVARIANT: the observability workloads run with wait = false so a
+    brand-new cell can apply before it has worker nodes. `wait = false` skips only
+    the readiness poll — Helm hook Jobs still block a release independently — so
+    that only holds while this chart renders NO `helm.sh/hook` resources. The
+    pinned default was audited and renders none.
+
+    Before changing this, render the chart with the values in observability/ and
+    confirm it still emits no hooks. A chart that introduces a hook Job silently
+    restores the fresh-cell apply failure this module removed.
+  EOT
   type        = string
   default     = "0.108.0"
 }
