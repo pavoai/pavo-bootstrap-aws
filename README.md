@@ -393,11 +393,18 @@ Each in-VPC substrate a strict/residency customer opts into is gated by an opt-i
 | Flag | Installs (cell-scoped) | Instance routing flag | Cell→instance gate |
 |---|---|---|---|
 | `enable_eck` | ECK operator (self-hosted ES) | `es_mode` | `/pavo/cells/<cluster>/eck_ready` SSM + **fail-fast** — a `self_hosted` ES CR *hard-fails* without ECK |
-| `enable_observability` | in-VPC Grafana/Prometheus + OTel collector | `grafana_mode` | none — a misrouted cell just *drops* telemetry (soft), so no gate is warranted |
+| `enable_observability` | in-VPC Grafana/Prometheus + OTel collector | `grafana_mode` | Phase-4 one-time convergence barrier (see below) |
 
 - **Default `false`, opt-in per cell** — a cloud cell must not run an idle operator / unused monitoring stack.
 - **Set `true` in `cells/<cluster>/<cluster>.tfvars`** by whoever provisions the cell: the **customer** (mirrored module, their admin, they audit it) or **Pavo** at onboarding. Recorded in tfvars so it can't silently regress; never automatic, never a runtime toggle. Self-hosted customer → both `true`, paired with the matching instance flag.
-- **Cell-level, not per-instance:** the substrate is cluster-scoped (one operator / one Grafana per cell), so a per-instance flag can't create it. `es_mode`/`grafana_mode` only **route**. Only ES adds a readiness gate (`eck_ready` fail-fast) because its failure is hard; observability's is soft, so `enable_observability` + `grafana_mode` are simply set together.
+- **Cell-level, not per-instance:** the substrate is cluster-scoped (one operator / one Grafana per cell), so a per-instance flag can't create it. `es_mode`/`grafana_mode` only **route**.
+- **Both substrates are gated, for different reasons and at different points.** ES uses `eck_ready` as a *pre*-condition: a `self_hosted` ES CR hard-fails without the operator, so Phase 4 must refuse to start. Observability is gated *after* the fact, by a one-time Phase-4 convergence barrier.
+
+  An earlier version of this table said observability needed no gate, on the grounds that a misrouted cell merely *drops* telemetry and the failure is therefore soft. **That reasoning has been retired.** Observability is not an ordinary workload whose loss degrades one feature: it is the mechanism that reports whether everything else is healthy. A cell reaching READY with a monitoring substrate that never started is a bad terminal state, because every subsequent failure becomes partly or wholly invisible. The invariant is now:
+
+  > A newly created cell must not complete Phase 4 successfully unless the minimum observability data path has converged at least once.
+
+  Deliberately narrow. It is a one-time creation assertion, **not** a permanent health check — Terraform must not become an ongoing monitoring system. Continuous health after creation belongs to Prometheus, Alertmanager and the workload-health alerting rules. Those two mechanisms cover different failure modes and neither substitutes for the other: the alerts run *inside* the stack they watch, so they cannot report Prometheus failing to start, which is exactly what the barrier exists to catch.
 
 ## Runbooks & reference
 

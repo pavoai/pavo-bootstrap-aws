@@ -392,6 +392,44 @@ resource "aws_ssm_parameter" "eck_ready" {
   depends_on = [helm_release.eck_operator]
 }
 
+# observability_ready (cell -> instance): the second half of the same cell->instance
+# SSM "API" as eck_ready, and it means something deliberately weaker.
+#
+# eck_ready means "the ECK operator is UP" — that release runs with the default
+# wait = true, so the parameter cannot be written until the operator StatefulSet
+# has rolled out.
+#
+# observability_ready means only "this cell INSTALLED the observability stack".
+# It does NOT mean the stack is running. The observability workloads carry
+# wait = false / wait_for_rollout = false on purpose, because on a brand-new cell
+# they legitimately cannot schedule until Omnistrate creates worker nodes, and
+# blocking the customer's Phase-3 apply on that is what forced the manual
+# two-phase toggle during the Coursera onboarding.
+#
+# So this parameter answers "is there supposed to be a receiver here?", which is
+# what an instance needs in order to fail fast on a misconfiguration
+# (grafana_mode = self_hosted against a cell that was never bootstrapped for it).
+# Whether the stack actually CONVERGED is asserted separately, once, by the
+# Phase-4 barrier in terraform-omnistrate-aws/observability_readiness.tf — which
+# runs from outside this cluster and can therefore see failures the in-cluster
+# monitoring cannot report about itself.
+resource "aws_ssm_parameter" "observability_ready" {
+  count = var.enable_observability ? 1 : 0
+
+  name  = "/pavo/cells/${var.eks_cluster_name}/observability_ready"
+  type  = "String"
+  value = "true"
+
+  # Ordering only — see above. These resources return as soon as the objects are
+  # created, not when the pods are Ready.
+  depends_on = [
+    kubernetes_stateful_set_v1.observability_postgres,
+    helm_release.observability_prometheus,
+    helm_release.observability_grafana,
+    helm_release.observability_otel_collector,
+  ]
+}
+
 # ============================================================================
 # Stakater Reloader — Helm release (cell-scoped)
 # ============================================================================

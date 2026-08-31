@@ -2,13 +2,13 @@
 
 Per-cell config for applying `pavo-bootstrap-aws` to the **awstest** dev cell.
 This directory is the single source of truth for how this cell is bootstrapped
-and is what the (planned) **"Release Omnistrate Bootstrap Dev"** GitHub Action
-consumes.
+and is what the **"Release Omnistrate Bootstrap Dev"** GitHub Action consumes
+when it is armed. **It is not armed today** — see *Automated apply (CI)* below.
 
 | File | Purpose |
 |---|---|
 | `backend.s3.tfbackend` | Partial S3 backend config (state key `pavo-bootstrap-aws/hc-fmnwao4ct/terraform.tfstate`). |
-| `hc-fmnwao4ct.tfvars` | Cell input values (non-secret infra IDs + `enable_eck`, `image_policy_mode`). |
+| `hc-fmnwao4ct.tfvars` | Cell input values (non-secret infra IDs + `enable_eck`, `enable_observability`, `observability_grafana_host`, `image_policy_mode`). |
 
 ## Apply
 
@@ -46,6 +46,21 @@ prerequisites before it can run (see the workflow header):
 4. Repo variable `BOOTSTRAP_DEV_APPLY_ENABLED = "true"` to arm the apply job —
    until set, `apply` is skipped (not failed) so merges don't fail-loop before
    the roles/access-entry exist.
+
+**Status as of 2026-08-31: none of the three repo variables are set**, so every
+run of this workflow to date has reported `skipped` for both jobs. The OIDC
+provider (prerequisite 1) does exist in `453542520145`; the roles do not. So
+this cell is currently applied **by hand** using the commands above, not by CI.
+
+Read `skipped` as "never ran", not "passed". Until the variables are set, the
+only thing standing between a bad `pavo-bootstrap-aws` change and this cell is
+whoever runs the apply.
+
+Note also that arming the `apply` job would make CI apply with HashiCorp
+Terraform, while this cell's state is currently owned by OpenTofu provider
+addresses (every resource references `registry.opentofu.org/...`). Reconcile
+that first — see the provider-source migration notes before setting
+`BOOTSTRAP_DEV_APPLY_ENABLED`.
 
 ## Enforcement rollout
 

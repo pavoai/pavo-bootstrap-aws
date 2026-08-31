@@ -1002,6 +1002,36 @@ cell_kms_key_arn           = "arn:aws:kms:us-east-1:<acct>:key/<uuid>"
 # pavo_app_alerts_enabled  = true   # only once a signed sanitizer image exists
 ```
 
+**Set it once, on a brand-new cell, and apply once.** There is no two-phase dance.
+
+This is worth stating explicitly because the opposite used to be true. On a
+brand-new cell the customer applies this module BEFORE the cell has converged:
+the only nodes present carry Omnistrate's `CriticalAddonsOnly=true:NoSchedule`
+taint. Postgres is worse still: `gp3-cmk` uses `WaitForFirstConsumer`, so the
+scheduler must pick a node BEFORE the EBS volume is provisioned and the PVC
+binds — with no schedulable node, provisioning never starts and the PVC stays
+Pending. The pods legitimately cannot start yet. The providers'
+default readiness waits then timed out and failed the apply on infrastructure
+that was otherwise perfectly correct, so the workaround during the Coursera
+onboarding was: apply with `enable_observability = false`, wait for the cell to
+reach RUNNING, flip it to `true`, apply again.
+
+The workloads now carry `wait = false` (and `wait_for_rollout = false` on the
+Postgres StatefulSet), so the apply completes and the pods schedule on their own
+once worker nodes appear. **If you find an older note telling you to toggle the
+flag between applies, it is stale — do not follow it.**
+
+Two consequences worth knowing:
+
+- **Apply success no longer means the stack is up.** It means the objects were
+  created. Convergence is asserted separately by the Phase-4 barrier, and
+  continuously by the alerting rules below.
+- **`wait = false` does not skip Helm hooks.** Hook Jobs still block a release
+  independently, so this only works because all three charts render zero
+  `helm.sh/hook` resources at their pinned versions (prometheus 29.17.0, grafana
+  10.5.15, opentelemetry-collector 0.108.0). **Re-audit on every chart bump** — a
+  chart that introduces a hook Job silently restores the old coupling.
+
 ### Alert rules
 
 Rules live in `observability/prometheus-values.yaml.tftpl` under

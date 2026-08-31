@@ -206,6 +206,22 @@ resource "kubernetes_service_v1" "observability_postgres" {
 
 resource "kubernetes_stateful_set_v1" "observability_postgres" {
   count = local.obs_count
+
+  # Do not block the apply on the pod becoming Ready. See the "Readiness is not
+  # this module's job" note above the helm releases below — same reasoning, and
+  # this is the resource that stays pending longest on a fresh cell, because it
+  # is the only one here backed by a PVC.
+  #
+  # The ordering is worth being precise about, because it is the opposite of the
+  # intuitive one. gp3-cmk uses volume_binding_mode = "WaitForFirstConsumer", so
+  # the PVC is NOT provisioned first and then scheduled against. The scheduler
+  # must pick a node FIRST; only then does the EBS volume get provisioned in that
+  # node's AZ and the PVC bind. With no schedulable worker node, nothing selects
+  # a node, so provisioning never starts, the PVC stays Pending, and the pod
+  # never runs. Waiting on rollout here would just block the apply on the
+  # customer's cell having converged.
+  wait_for_rollout = false
+
   metadata {
     name      = "pavo-observability-postgres"
     namespace = local.obs_ns
@@ -305,8 +321,54 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
 }
 
 # ---- Helm releases ------------------------------------------------------------
+#
+# Readiness is not this module's job.
+# -----------------------------------
+# Every workload here carries `wait = false` (and the Postgres StatefulSet above
+# carries `wait_for_rollout = false`). This is deliberate and load-bearing, not a
+# way to make a flaky apply go green.
+#
+# The problem it solves: this module is applied by the CUSTOMER (Phase 3), which
+# on a brand-new cell happens BEFORE the cell has converged. At that moment there
+# are no schedulable worker nodes — the only nodes present carry Omnistrate's
+# `CriticalAddonsOnly=true:NoSchedule` taint. Postgres additionally needs a PVC
+# bound through the gp3-cmk StorageClass, which needs a node in the right AZ.
+# So the pods legitimately cannot start yet, the default waits time out, and the
+# whole apply fails on infrastructure that is otherwise perfectly correct.
+#
+# That is exactly what happened on the Coursera onboarding: the operator had to
+# apply once with enable_observability = false, wait for the cell to reach
+# RUNNING, then flip it to true and apply again. Encoding a manual two-phase
+# dance as a customer-facing instruction is the bug; these flags remove it.
+#
+# What this does NOT do:
+#   - It does not skip Helm hooks. `wait = false` only skips the post-install
+#     readiness poll; hook Jobs still block the release independently. That is
+#     safe here only because all three charts, at the versions pinned in
+#     variables.tf (prometheus 29.17.0, grafana 10.5.15, opentelemetry-collector
+#     0.108.0), render ZERO `helm.sh/hook` resources. RE-AUDIT ON EVERY CHART
+#     BUMP — a chart that introduces a hook Job would silently reintroduce the
+#     coupling this removes.
+#   - It does not change `count`, so `enable_observability` still structurally
+#     decides whether these objects exist at all.
+#   - It does not mean nobody checks. It moves the readiness assertion to where
+#     it belongs: the Phase-4 convergence barrier in
+#     terraform-omnistrate-aws/observability_readiness.tf, which runs from the
+#     Omnistrate runner once the cell is actually up. That barrier hard-fails the
+#     instance apply if Prometheus, Alertmanager, Grafana (and Postgres behind
+#     it) or the OTel collector never converged, and — the part an in-cluster
+#     check cannot do — if Prometheus is serving no kube_* series at all.
+#     This module publishes /pavo/cells/<cluster>/observability_ready for it to
+#     key off; that parameter means "the stack was INSTALLED", never "it is up".
+#     An apply-time wait here can only ever assert "ready before the cluster
+#     existed", which is not a useful thing to assert.
+#
+# Net effect: applying is idempotent and order-independent. A fresh cell converges
+# on its own instead of requiring an operator to toggle a flag between applies.
+
 resource "helm_release" "observability_prometheus" {
   count = local.obs_count
+  wait  = false # see "Readiness is not this module's job" above
 
   name       = "pavo-observability-prometheus"
   namespace  = local.obs_ns
@@ -327,6 +389,7 @@ resource "helm_release" "observability_prometheus" {
 
 resource "helm_release" "observability_grafana" {
   count = local.obs_count
+  wait  = false # see "Readiness is not this module's job" above
 
   # Fail fast if enabled without a host: an empty grafana_host renders a broken
   # domain / root_url / ingress host ("grafana.") rather than failing at plan.
@@ -356,6 +419,7 @@ resource "helm_release" "observability_grafana" {
 
 resource "helm_release" "observability_otel_collector" {
   count = local.obs_count
+  wait  = false # see "Readiness is not this module's job" above
 
   name              = "pavo-otel"
   namespace         = local.obs_ns
