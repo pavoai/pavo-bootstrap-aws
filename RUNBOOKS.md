@@ -337,6 +337,24 @@ pip install boto3
 scripts/simulate-policy.py
 ```
 
+**CI runs this too, as the `simulate` job in `check-policy-drift`.** It was not
+always so: the script sat in that workflow's `paths:` trigger from the day it
+landed with no job executing it, so CI advertised the check and ran none of its
+assertions. Two runner-only ElastiCache cases sat failing on `main` unnoticed
+until someone ran it by hand.
+
+The job federates to AWS via OIDC using the role in repo variable
+`POLICY_SIMULATE_ROLE_ARN` (`pavo-terraform-templates-policy-simulate` in
+`453542520145`), whose only permission is `iam:SimulateCustomPolicy` and which
+carries a permissions boundary capping it there. `simulate-custom-policy` takes
+the policy document as **input** and reads no account state, so the role can see
+nothing and change nothing, and the verdict is account-independent. Like
+`release-bootstrap-dev`, the job is **skipped rather than failed** if that
+variable is unset, and never runs on fork PRs.
+
+Running it locally is still worth doing before pushing — the CI job is a
+backstop, not a substitute for checking your own change.
+
 The script uses `aws iam simulate-custom-policy` with the boundary fed through
 `--permissions-boundary-policy-input-list` against an allow-all identity policy,
 so the simulation reflects how the boundary actually behaves in production
