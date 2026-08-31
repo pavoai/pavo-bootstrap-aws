@@ -984,6 +984,37 @@ cell_kms_key_arn           = "arn:aws:kms:us-east-1:<acct>:key/<uuid>"
 # pavo_app_alerts_enabled  = true   # only once a signed sanitizer image exists
 ```
 
+### Alert rules
+
+Rules live in `observability/prometheus-values.yaml.tftpl` under
+`alerting_rules.yml`. Four groups:
+
+| Group | Covers |
+|---|---|
+| `elasticsearch` | cluster red/yellow, unassigned shards, disk flood watermark, exporter down |
+| `temporal` | role availability, SLO latencies, shard-lock latency, persistence errors, resource-exhausted, payload-size limits, no-poller task queues |
+| `workloads` | **any** Deployment or container in `instance-*` namespaces |
+| routing (`null`, `customer`, `pavo-sanitizer`) | where alerts are delivered, not what fires |
+
+The `workloads` group is deliberately generic — it matches every Deployment and
+container rather than naming services, so a workload added later is covered
+without editing this file:
+
+- **`DeploymentReplicasUnavailable`** — available < desired for 15m. Fires for a
+  bad image, a failing probe, unschedulable Pods, or a Pod that cannot start
+  because its config is wrong. 15m clears an ordinary rolling update.
+- **`ContainerCrashLooping`** — any container, **including init containers**, in
+  `CrashLoopBackOff` for 10m. Separate from the rule above because a Deployment
+  can sit at its desired replica count while extra Pods crash-loop behind it: an
+  HPA scale-up into a broken config looks healthy by replica count alone.
+
+StatefulSets are not covered — the only one on a cell is Elasticsearch, which has
+its own health alerts in the `elasticsearch` group.
+
+> **Merging a rule change does not deliver it.** This module is customer-applied,
+> so new rules only reach a cell when that customer re-runs `terraform apply`.
+> Track the re-apply per cell; a merged alert is not a live alert.
+
 ### Dashboards
 
 Dashboards are **as-code** — ConfigMaps labelled `grafana_dashboard`, loaded by the
