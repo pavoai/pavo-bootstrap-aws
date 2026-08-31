@@ -36,7 +36,14 @@
     ]
   },
   {
+    "sid": "ElastiCacheConnectWorkload",
+    "effect": "Allow",
+    "actions": ["elasticache:Connect"],
+    "resources": ["arn:aws:elasticache:*:*:replicationgroup:pavo-*"]
+  },
+  {
     "sid": "ElastiCacheMutatingPavoResources",
+    "scope": "runner",
     "effect": "Allow",
     "actions": ["elasticache:*"],
     "resources": [
@@ -67,19 +74,48 @@
     "resources": ["arn:aws:sqs:*:*:pavo-*"]
   },
   {
-    "sid": "SES",
+    "sid": "SESCreateIdentityWithRequestTag",
+    "effect": "Allow",
+    "actions": ["ses:CreateEmailIdentity"],
+    "resources": ["arn:aws:ses:*:*:identity/*"],
+    "conditions": {
+      "StringEquals": { "aws:RequestTag/managed_by": "pavo" }
+    }
+  },
+  {
+    "sid": "SESMutatingTaggedPavoIdentities",
     "effect": "Allow",
     "actions": [
       "ses:SendEmail",
-      "ses:CreateEmailIdentity",
       "ses:DeleteEmailIdentity",
       "ses:GetEmailIdentity",
       "ses:ListTagsForResource",
-      "ses:TagResource",
-      "ses:UntagResource",
       "ses:PutEmailIdentityDkimSigningAttributes"
     ],
-    "resources": ["arn:aws:ses:*:*:identity/*"]
+    "resources": ["arn:aws:ses:*:*:identity/*"],
+    "conditions": {
+      "StringEquals": { "aws:ResourceTag/managed_by": "pavo" }
+    }
+  },
+  {
+    "sid": "SESTagWithoutRewritingOwnership",
+    "effect": "Allow",
+    "actions": ["ses:TagResource"],
+    "resources": ["arn:aws:ses:*:*:identity/*"],
+    "conditions": {
+      "StringEquals": { "aws:ResourceTag/managed_by": "pavo" },
+      "StringEqualsIfExists": { "aws:RequestTag/managed_by": "pavo" }
+    }
+  },
+  {
+    "sid": "SESUntagExceptOwnership",
+    "effect": "Allow",
+    "actions": ["ses:UntagResource"],
+    "resources": ["arn:aws:ses:*:*:identity/*"],
+    "conditions": {
+      "StringEquals": { "aws:ResourceTag/managed_by": "pavo" },
+      "ForAllValues:StringNotEquals": { "aws:TagKeys": ["managed_by"] }
+    }
   },
   {
     "sid": "EFSCreateFileSystemWithRequestTag",

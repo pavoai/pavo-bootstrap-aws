@@ -29,15 +29,13 @@
       ]
     },
     {
-      "Sid": "ElastiCacheMutatingPavoResources",
+      "Sid": "ElastiCacheConnectWorkload",
       "Effect": "Allow",
       "Action": [
-        "elasticache:*"
+        "elasticache:Connect"
       ],
       "Resource": [
-        "arn:aws:elasticache:*:*:replicationgroup:pavo-*",
-        "arn:aws:elasticache:*:*:subnetgroup:pavo-*",
-        "arn:aws:elasticache:*:*:parametergroup:default.redis7"
+        "arn:aws:elasticache:*:*:replicationgroup:pavo-*"
       ]
     },
     {
@@ -72,21 +70,76 @@
       ]
     },
     {
-      "Sid": "SES",
+      "Sid": "SESCreateIdentityWithRequestTag",
+      "Effect": "Allow",
+      "Action": [
+        "ses:CreateEmailIdentity"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/managed_by": "pavo"
+        }
+      }
+    },
+    {
+      "Sid": "SESMutatingTaggedPavoIdentities",
       "Effect": "Allow",
       "Action": [
         "ses:SendEmail",
-        "ses:CreateEmailIdentity",
         "ses:DeleteEmailIdentity",
         "ses:GetEmailIdentity",
         "ses:ListTagsForResource",
-        "ses:TagResource",
-        "ses:UntagResource",
         "ses:PutEmailIdentityDkimSigningAttributes"
       ],
       "Resource": [
         "arn:aws:ses:*:*:identity/*"
-      ]
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "pavo"
+        }
+      }
+    },
+    {
+      "Sid": "SESTagWithoutRewritingOwnership",
+      "Effect": "Allow",
+      "Action": [
+        "ses:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "pavo"
+        },
+        "StringEqualsIfExists": {
+          "aws:RequestTag/managed_by": "pavo"
+        }
+      }
+    },
+    {
+      "Sid": "SESUntagExceptOwnership",
+      "Effect": "Allow",
+      "Action": [
+        "ses:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "pavo"
+        },
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "managed_by"
+          ]
+        }
+      }
     },
     {
       "Sid": "BedrockInvokeScopedToModels",
