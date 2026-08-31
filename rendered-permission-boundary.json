@@ -29,16 +29,6 @@
       ]
     },
     {
-      "Sid": "ElastiCacheConnectWorkload",
-      "Effect": "Allow",
-      "Action": [
-        "elasticache:Connect"
-      ],
-      "Resource": [
-        "arn:aws:elasticache:*:*:replicationgroup:pavo-*"
-      ]
-    },
-    {
       "Sid": "S3",
       "Effect": "Allow",
       "Action": [
