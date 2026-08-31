@@ -1041,7 +1041,7 @@ Rules live in `observability/prometheus-values.yaml.tftpl` under
 |---|---|
 | `elasticsearch` | cluster red/yellow, unassigned shards, disk flood watermark, exporter down |
 | `temporal` | role availability, SLO latencies, shard-lock latency, persistence errors, resource-exhausted, payload-size limits, no-poller task queues |
-| `workloads` | **any** Deployment or container in `instance-*` namespaces |
+| `workloads` | **any** Deployment or container in `instance-*` **and `pavo-observability`**, plus StatefulSets in `pavo-observability` |
 | routing (`null`, `customer`, `pavo-sanitizer`) | where alerts are delivered, not what fires |
 
 The `workloads` group is deliberately generic — it matches every Deployment and
@@ -1055,13 +1055,85 @@ without editing this file:
   `CrashLoopBackOff` for 10m. Separate from the rule above because a Deployment
   can sit at its desired replica count while extra Pods crash-loop behind it: an
   HPA scale-up into a broken config looks healthy by replica count alone.
+- **`StatefulSetReplicasUnavailable`** — ready < desired for 15m, scoped to
+  `pavo-observability` only. Exists for **Alertmanager**, which the Alertmanager
+  chart ships as a StatefulSet, so the Deployment rule never saw it and nothing
+  probes it transitively. When Alertmanager is down, alerts stop being
+  *delivered* while every other workload still looks healthy.
 
-StatefulSets are not covered — the only one on a cell is Elasticsearch, which has
-its own health alerts in the `elasticsearch` group.
+`pavo-observability` is in scope because the observability stack was otherwise
+the one thing the monitoring did not monitor. Elasticsearch is deliberately left
+out of the StatefulSet rule — it is a StatefulSet in the instance namespaces with
+its own alerts in the `elasticsearch` group, and widening the rule would only
+double-alert on it.
 
 > **Merging a rule change does not deliver it.** This module is customer-applied,
 > so new rules only reach a cell when that customer re-runs `terraform apply`.
 > Track the re-apply per cell; a merged alert is not a live alert.
+
+#### Coverage of the observability stack
+
+Eight workloads run in `pavo-observability`:
+
+- **Deployments** (alert sanitizer, grafana, kube-state-metrics, prometheus
+  server, otel collector) — covered directly, including Pending and
+  unschedulable Pods
+- **`pavo-observability-postgres`** (StatefulSet) — covered directly, and also
+  transitively: Grafana's readiness probe is `/api/health`, which returns 503
+  when it cannot reach its database
+- **`pavo-observability-prometheus-alertmanager`** (StatefulSet) — covered
+  directly, and only by the StatefulSet rule
+- **node-exporter** (DaemonSet) — not covered. An outage shows up as metric gaps
+  and is low stakes.
+
+#### What these rules structurally cannot do
+
+**They run inside the stack they watch.** Read this before treating them as
+sufficient:
+
+- If Prometheus never becomes available, nothing evaluates the rule that would
+  say so.
+- If **kube-state-metrics** is down, every `kube_deployment_*`, `kube_pod_*` and
+  `kube_statefulset_*` series disappears. All three rules then compare empty
+  vectors and **silently stop firing** rather than alerting. This is not
+  theoretical: KSM was found CrashLoopBackOff for 25 days on the dev cell behind
+  a NetworkPolicy that denied the API ClusterIP, and the workload alerts could
+  not fire at all for the entire period.
+- If Alertmanager or the forwarding path is down, the rules evaluate correctly
+  and nobody receives the result.
+
+So these cover **steady-state degradation only**. First-convergence assertion is
+the Phase-4 barrier's job
+(`terraform-omnistrate-aws/observability_readiness.tf`), because that runs from
+outside the cell.
+
+**When triaging "why did we not get an alert", check kube-state-metrics first:**
+
+```bash
+kubectl -n pavo-observability get pods -l app.kubernetes.io/name=kube-state-metrics
+# and confirm Prometheus is actually scraping it:
+kubectl -n pavo-observability port-forward svc/pavo-observability-prometheus-server 9090:80
+curl -s 'http://localhost:9090/api/v1/targets?state=any' \
+  | jq -r '.data.activeTargets[] | select(.labels.job=="kube-state-metrics") | .health'
+```
+
+#### Editing the rules
+
+`observability/prometheus-values.yaml.tftpl` is a Terraform template, not a plain
+values file. `scripts/check-observability-rules.py` (run in CI by
+`validate-terraform`) renders it under all four combinations of
+`customer_leg_enabled` x `pavo_leg_enabled`, asserts each is valid YAML, runs
+`promtool check rules`, and asserts every namespace matcher still covers
+`pavo-observability`. Run it locally before pushing — it needs `terraform` and
+`promtool` on PATH:
+
+```bash
+scripts/check-observability-rules.py
+```
+
+Invalid PromQL does **not** fail loudly at runtime: Prometheus rejects the rule
+group and keeps serving, so the alert simply never fires. That is why this is
+checked in CI rather than discovered on a cell.
 
 ### Dashboards
 

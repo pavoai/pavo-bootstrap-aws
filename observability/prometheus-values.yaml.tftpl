@@ -357,15 +357,35 @@ serverFiles:
             annotations:
               summary: "Temporal tasks arriving on task queue {{ $labels.taskqueue }} with no pollers — worker missing or polling a wrong queue name; workflows hang silently"
       # Workload health. Deliberately generic: these two rules watch every
-      # Deployment and container in the instance namespace rather than naming
+      # Deployment and container in the scoped namespaces rather than naming
       # services, so a workload added later is covered without touching this
       # file. They are the backstop for the failure mode that cost us most of
       # 2026-08-28: config is wrong, the release still reports success, and the
       # damage only becomes visible when something recreates a Pod.
       #
+      # Scope is the app instance namespaces PLUS pavo-observability. The
+      # observability stack was previously the one thing the monitoring did not
+      # monitor, which mattered once the bootstrap stopped blocking its apply on
+      # pod readiness — without this, a Grafana or collector that fell over after
+      # a converged cell went unreported.
+      #
       # Both rules read kube-state-metrics (scraped by the job above).
-      # StatefulSets are intentionally not covered — the only one on a cell is
-      # Elasticsearch, which has its own health alerts in the group above.
+      #
+      # StatefulSets: covered for pavo-observability by a third rule below, NOT
+      # for the instance namespaces. Elasticsearch is a StatefulSet with its own
+      # health alerts in the group above, so widening the StatefulSet rule to the
+      # instance namespaces would only double-alert on it.
+      # (An earlier version of this comment claimed Elasticsearch was the only
+      # StatefulSet on a cell. That stopped being true when the observability
+      # stack landed, which added Postgres and Alertmanager.)
+      #
+      # LIMIT, read this before relying on these rules: they run INSIDE the stack
+      # they watch. They cannot detect Prometheus failing to start, and if
+      # kube-state-metrics is down the series vanish and the comparison below
+      # silently stops firing rather than alerting. First-convergence assertion is
+      # therefore NOT their job — that belongs to the Phase-4 readiness barrier,
+      # which runs from outside the cell. These rules cover steady-state
+      # degradation only.
       - name: workloads
         rules:
           # Fires whether the cause is a bad image, a failing probe, unschedulable
@@ -373,8 +393,8 @@ serverFiles:
           # long enough that an ordinary rolling update completes underneath it.
           - alert: DeploymentReplicasUnavailable
             expr: |
-              sum by (namespace, deployment) (kube_deployment_status_replicas_available{namespace=~"instance-.*"})
-                < sum by (namespace, deployment) (kube_deployment_spec_replicas{namespace=~"instance-.*"})
+              sum by (namespace, deployment) (kube_deployment_status_replicas_available{namespace=~"instance-.*|pavo-observability"})
+                < sum by (namespace, deployment) (kube_deployment_spec_replicas{namespace=~"instance-.*|pavo-observability"})
             for: 15m
             labels:
               severity: warning
@@ -389,11 +409,39 @@ serverFiles:
           - alert: ContainerCrashLooping
             expr: |
               sum by (namespace, pod, container) (
-                kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff", namespace=~"instance-.*"}
-                or kube_pod_init_container_status_waiting_reason{reason="CrashLoopBackOff", namespace=~"instance-.*"}
+                kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff", namespace=~"instance-.*|pavo-observability"}
+                or kube_pod_init_container_status_waiting_reason{reason="CrashLoopBackOff", namespace=~"instance-.*|pavo-observability"}
               ) > 0
             for: 10m
             labels:
               severity: warning
             annotations:
               summary: "Container {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }} is in CrashLoopBackOff — it cannot start with its current image or config"
+          # StatefulSets, pavo-observability ONLY. Deliberately narrower than the
+          # two rules above.
+          #
+          # The namespace holds two StatefulSets, and kube_deployment_* does not
+          # see either: pavo-observability-postgres and
+          # pavo-observability-prometheus-alertmanager (the Alertmanager chart
+          # ships a StatefulSet, not a Deployment — verified on a live cell).
+          #
+          # Postgres alone would not justify this rule, since Grafana's
+          # /api/health readiness probe returns 503 when it cannot reach its
+          # database, so a Postgres outage already surfaces as Grafana replicas
+          # unavailable. ALERTMANAGER is why this rule exists: nothing probes it
+          # transitively, and when it is down alerts stop being DELIVERED while
+          # everything else still looks healthy. That is the quietest possible
+          # failure in an alerting stack.
+          #
+          # Scoped to pavo-observability rather than the instance namespaces so
+          # this does not start double-alerting on Elasticsearch, which is a
+          # StatefulSet with its own health rules in the group above.
+          - alert: StatefulSetReplicasUnavailable
+            expr: |
+              sum by (namespace, statefulset) (kube_statefulset_status_replicas_ready{namespace="pavo-observability"})
+                < sum by (namespace, statefulset) (kube_statefulset_replicas{namespace="pavo-observability"})
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "StatefulSet {{ $labels.namespace }}/{{ $labels.statefulset }} has fewer ready replicas than desired for 15m — if this is Alertmanager, alert delivery is down and other alerts will not reach anyone"
