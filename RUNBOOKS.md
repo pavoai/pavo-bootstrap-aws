@@ -1171,7 +1171,10 @@ cell for 41 days — only the marker was missing.
 
 `scripts/check-cell-marker-ordering.py` enforces step 1 before step 3 in CI: a
 marker referenced by a consumer must already exist as a producer on the base
-branch.
+branch. "Producer" means specifically `resource "aws_ssm_parameter" { name = … }`
+— it parses the HCL rather than grepping it, so a `data "aws_ssm_parameter"`
+(which reads the marker), a `locals` block, an `output`, a comment or a heredoc
+naming the same path does not count as publishing it.
 
 **What CI cannot enforce:** step 2. BYOC cells live in customer AWS accounts
 this repo has no credentials for, so whether a cell has actually applied the
