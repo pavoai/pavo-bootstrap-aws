@@ -46,6 +46,14 @@ prerequisites before it can run (see the workflow header):
 4. Repo variable `BOOTSTRAP_DEV_APPLY_ENABLED = "true"` to arm the apply job —
    until set, `apply` is skipped (not failed) so merges don't fail-loop before
    the roles/access-entry exist.
+5. Repo secrets for the module's two required sensitive inputs:
+   `GHCR_READ_USERNAME` + `GHCR_READ_PAT` (already present, combined into
+   `ghcr_dockerconfig`) and `PAVO_ALERT_WEBHOOK_URL` (new). Without them the
+   plan fails its `observability.tf` preconditions, and an apply would rewrite
+   the `pavo-ghcr-signature-pull` secret empty. The workflow fails closed on
+   empty GHCR credentials before building the dockerconfig, because the encoded
+   form of two empty strings is itself non-empty and would satisfy the module's
+   precondition while authenticating as nobody.
 
 **Status as of 2026-08-31: none of the three repo variables are set**, so every
 run of this workflow to date has reported `skipped` for both jobs. The OIDC
