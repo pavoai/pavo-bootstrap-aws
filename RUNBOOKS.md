@@ -1143,3 +1143,37 @@ module's version** (edit the JSON, tag, customers pick it up on their next apply
 For an urgent fix without a release, apply the ConfigMap directly:
 `kubectl apply -f observability/manifests/<dashboard>.yaml -n pavo-observability`
 (and back-port the edit into the module so the next apply doesn't revert it).
+
+## Adding a cell-level readiness gate (two changes, never one)
+
+`pavo-bootstrap-aws` publishes `/pavo/cells/<cluster>/<marker>` and is applied
+**per cell, by the customer, on their schedule**. `terraform-omnistrate-aws`
+consumes those markers and ships with **every Omnistrate release**. Two
+pipelines, wildly different speeds, so a single commit that adds both a marker
+and the gate requiring it is not atomic in production. The gate reaches
+instances immediately; the marker reaches a cell only when someone re-bootstraps
+it, and every cell in between fails.
+
+This is not hypothetical. #369 added `observability_ready` and its `pavoInfra`
+precondition in one commit on 2026-08-31. awstest went `FAILED` the same day
+with `.../observability_ready does not exist`. The gate was correct; the
+ordering was not. The observability stack had in fact been installed on that
+cell for 41 days — only the marker was missing.
+
+**The procedure:**
+
+1. Add the producer to `pavo-bootstrap-aws` and merge it. Nothing consumes it
+   yet, so this is inert.
+2. Re-bootstrap every cell that will later be asked for the marker. awstest
+   reconciles itself via `Release Omnistrate Bootstrap Dev`; customer cells are
+   customer-applied and must be done deliberately.
+3. Only then add the gate to `terraform-omnistrate-aws`.
+
+`scripts/check-cell-marker-ordering.py` enforces step 1 before step 3 in CI: a
+marker referenced by a consumer must already exist as a producer on the base
+branch.
+
+**What CI cannot enforce:** step 2. BYOC cells live in customer AWS accounts
+this repo has no credentials for, so whether a cell has actually applied the
+producer is not observable from here. That step stays a human one, and it is the
+step that actually protects customers.
