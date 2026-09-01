@@ -422,23 +422,27 @@ module owns the resource, who applies it, and where state lives.
 
 | Scope | Module | Applier | State backend | Examples |
 |---|---|---|---|---|
-| **Account** | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IAM permission boundaries, `/pavo/shared/*` SSM |
-| **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
+| **Account** | `pavo-bootstrap-aws/` (AWS only) | Customer (AWS creds) | Customer-local | IAM permission boundaries, `/pavo/shared/*` SSM |
+| **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` (AWS only) | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
 | **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | GCS `gs://pavo-terraform-state`, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
-| **Instance** (one Pavo deployment) | `terraform-omnistrate-aws/` | Omnistrate runner | Omnistrate-managed | RDS, ElastiCache, S3, SNS/SQS, EFS, workload IAM role, app namespace, app secrets, Elastic Cloud deployment |
+| **Instance** (one Pavo deployment) | `terraform-omnistrate-aws/` (AWS)<br>`terraform-omnistrate-gcp/` (GCP) | Omnistrate runner | Omnistrate-managed | AWS: RDS, ElastiCache, S3, SNS/SQS, EFS, workload IAM role.<br>GCP: Cloud SQL, Memorystore, GCS, Pub/Sub, workload service account.<br>Both: per-instance namespace, app secrets, Elastic Cloud deployment |
+
+Account and Cell scope are AWS-only today: GCP has no cell-bootstrap module, so a
+GCP cell's substrate is not customer-applied. Customer scope is cloud-neutral —
+`pavo-customer-bootstrap/` owns identity for both clouds.
 
 ### Picking the right module for a new resource
 
-1. If deleting one Pavo instance shouldn't delete it → not `terraform-omnistrate-aws/`.
-2. If its `name` doesn't include `var.instance_id` → probably not `terraform-omnistrate-aws/`.
+1. If deleting one Pavo instance shouldn't delete it → not the per-instance module (`terraform-omnistrate-aws/` or `terraform-omnistrate-gcp/`).
+2. If its `name` doesn't include `var.instance_id` → probably not the per-instance module.
 3. If it lives in Pavo's identity tenant (Zitadel) → `pavo-customer-bootstrap/`.
 4. If it's cluster-scoped K8s or per-cell IAM → `pavo-bootstrap-aws/`.
-5. Otherwise (per-instance app resource) → `terraform-omnistrate-aws/`.
+5. Otherwise (per-instance app resource) → the per-instance module for that cloud.
 6. If it's a self-hostable cell substrate the customer opts into (ECK, in-VPC observability) → `pavo-bootstrap-aws/` behind an `enable_*` flag — NEVER an Omnistrate cell-amenity. See `pavo-bootstrap-aws/README.md` → *Cell self-hosting flags*.
 
 ### Hard rules
 
-- No cluster-scoped K8s resource may live in `terraform-omnistrate-aws/`, even with `apply_only = true` as a mitigation.
+- No cluster-scoped K8s resource may live in a per-instance module, even with `apply_only = true` as a mitigation.
 - `pavo-customer-bootstrap/` MUST NOT declare `instance_id` as a variable (structural enforcement of the customer-hostname invariant).
 - A second cell in the same AWS account is currently guarded by an SSM sentinel — see `pavo-bootstrap-aws/README.md`.
 - No fifth "place": Omnistrate cell-amenities are not a home for Pavo infra. Cell-scoped infra a customer should apply/audit in their VPC → `pavo-bootstrap-aws/` (customer-applied), never an amenity (Pavo-applied, no audit trail). The observability stack shipped as an amenity by mistake — now migrated to `enable_observability` in `pavo-bootstrap-aws/` (the old `observability/` amenity module was removed).
