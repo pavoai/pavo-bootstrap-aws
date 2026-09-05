@@ -28,7 +28,35 @@ data:
         "to": "now"
       },
       "templating": {
-        "list": []
+        "list": [
+          {
+            "name": "namespace",
+            "label": "Instance namespace",
+            "description": "Omnistrate instance namespace(s) on this cell. All = every instance-* namespace, so single-instance cells need no selection.",
+            "type": "query",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "prometheus"
+            },
+            "definition": "label_values(kube_pod_info, namespace)",
+            "query": {
+              "query": "label_values(kube_pod_info, namespace)",
+              "refId": "PrometheusVariableQueryEditor-VariableQuery"
+            },
+            "regex": "/^instance-.*/",
+            "refresh": 1,
+            "sort": 1,
+            "includeAll": true,
+            "allValue": "instance-.*",
+            "multi": false,
+            "current": {
+              "selected": true,
+              "text": "All",
+              "value": "$__all"
+            },
+            "options": []
+          }
+        ]
       },
       "annotations": {
         "list": []
@@ -95,7 +123,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(kube_pod_status_phase{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",phase=\"Running\"})",
+              "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",phase=\"Running\"})",
               "legendFormat": "Tribal pods running",
               "refId": "A"
             }
@@ -157,7 +185,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\"}[1h]))",
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\"}[1h]))",
               "legendFormat": "Tribal restarts (1h)",
               "refId": "A"
             }
@@ -211,7 +239,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "count(count by (container) (container_cpu_usage_seconds_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}))",
+              "expr": "count(count by (container) (container_cpu_usage_seconds_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}))",
               "legendFormat": "Sub-services",
               "refId": "A"
             }
@@ -321,7 +349,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}[5m]))",
+              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}[5m]))",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -377,7 +405,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"})",
+              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"})",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -446,7 +474,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}[5m]))",
+              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}[5m]))",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -502,7 +530,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"})",
+              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"})",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -558,7 +586,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\"}[5m]))",
+              "expr": "sum(rate(container_network_receive_bytes_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\"}[5m]))",
               "legendFormat": "rx",
               "refId": "A"
             },
@@ -567,7 +595,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "- sum(rate(container_network_transmit_bytes_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\"}[5m]))",
+              "expr": "- sum(rate(container_network_transmit_bytes_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\"}[5m]))",
               "legendFormat": "tx",
               "refId": "B"
             }
@@ -623,7 +651,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\"}[1h]))",
+              "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\"}[1h]))",
               "legendFormat": "{{pod}}",
               "refId": "A"
             }
@@ -679,7 +707,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(kube_pod_status_ready{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",condition=\"true\"})",
+              "expr": "sum(kube_pod_status_ready{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",condition=\"true\"})",
               "legendFormat": "ready",
               "refId": "A"
             }
@@ -735,7 +763,7 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "100 * sum by (pod) (container_memory_working_set_bytes{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}) / sum by (pod) (container_spec_memory_limit_bytes{namespace=\"instance-836t09q9s\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"} > 0)",
+              "expr": "100 * sum by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"}) / sum by (pod) (container_spec_memory_limit_bytes{namespace=~\"$namespace\",pod=~\"pavo-tribal.*\",container!=\"\",container!=\"POD\"} > 0)",
               "legendFormat": "{{pod}}",
               "refId": "A"
             }
