@@ -392,6 +392,27 @@ resource "aws_ssm_parameter" "eck_ready" {
   depends_on = [helm_release.eck_operator]
 }
 
+# network_policy_ready gate (cell -> instance): operator-asserted signal that the
+# cell's AWS VPC CNI NetworkPolicy enforcement is on (an Omnistrate-owned add-on
+# we can't toggle here). The per-instance module fails-fast on it for
+# network_posture=strict, so a strict instance can never run with its staged
+# default-deny NetworkPolicies inert (which would silently still allow egress).
+resource "aws_ssm_parameter" "network_policy_ready" {
+  count = var.network_policy_ready ? 1 : 0
+
+  name  = "/pavo/cells/${var.eks_cluster_name}/network_policy_ready"
+  type  = "String"
+  value = "true"
+
+  # Ownership rules: every cell-shared resource waits on the single-cell
+  # sentinel. Without it this marker has no dependencies at all, so Terraform
+  # can create it in parallel with the guard — and an apply that the guard
+  # rejects would still leave a readiness marker a strict instance can consume.
+  # eck_ready and private_ca_ready get this transitively through the workloads
+  # they wait on; this one is a bare parameter, so it needs it stated.
+  depends_on = [aws_ssm_parameter.single_cell_guard]
+}
+
 # observability_ready (cell -> instance): the second half of the same cell->instance
 # SSM "API" as eck_ready, and it means something deliberately weaker.
 #

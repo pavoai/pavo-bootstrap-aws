@@ -130,6 +130,47 @@ variable "enable_eck" {
   default     = false
 }
 
+variable "install_private_ca" {
+  description = <<-EOT
+    Install the in-cell private CA (a cert-manager ClusterIssuer `pavo-private-ca`
+    backed by a self-signed root -> issuing intermediate) on this cell. Required
+    for a strict, zero-egress customer (network_posture = strict in the per-instance
+    module), whose ingress certs are issued by the private CA instead of public
+    ACME (Let's Encrypt HTTP-01 needs egress). Off by default; unnecessary on
+    standard cells (whose ingresses use the pavo-letsencrypt-prod ACME issuer).
+
+    INSTALL-ONCE / monotonic: flip false -> true when onboarding a strict cell; do
+    NOT flip back on a live cell. The CA objects are apply_only (never deleted by
+    Terraform) so the root/intermediate signing keys are not silently destroyed,
+    but flipping to false withdraws /pavo/cells/<eks_cluster_name>/private_ca_ready,
+    which makes every strict instance on the cell fail its readiness gate. Rotating
+    or retiring the root is an explicit multi-step rollover, not a flag flip.
+
+    When true the cell publishes /pavo/cells/<eks_cluster_name>/private_ca_ready=true
+    only after the ClusterIssuer is actually Ready; the per-instance module reads it
+    and fails-fast if a strict instance is created before the CA exists.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "network_policy_ready" {
+  description = <<-EOT
+    Assert that AWS VPC CNI NetworkPolicy ENFORCEMENT is enabled on this cell
+    (support enabled, NETWORK_POLICY_ENFORCING_MODE=standard). This is an
+    Omnistrate-owned cell add-on setting we cannot toggle from Terraform, so the
+    operator sets this true ONLY after Omnistrate confirms it. Off by default.
+
+    When true the cell publishes /pavo/cells/<eks_cluster_name>/network_policy_ready
+    =true; the per-instance module reads it and fails-fast if a network_posture=
+    strict instance is created before enforcement is on — otherwise the staged
+    default-deny NetworkPolicies would be inert and the "strict" instance would
+    silently still egress. Pair with install_private_ca for a production strict cell.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "eck_operator_chart_version" {
   description = <<-EOT
     Helm chart version for elastic/eck-operator. Operator and CRDs move in
