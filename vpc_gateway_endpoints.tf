@@ -1,10 +1,25 @@
 # =============================================================================
 # S3 / DynamoDB gateway endpoints for the node/pod route tables (ADAPTIVE)
 # =============================================================================
-# The EKS node/pod subnets sit on non-main route tables. For pod->S3/DynamoDB
-# traffic to stay private in-VPC (so aws:SourceVpc is set and a strict
-# default-deny cell with NAT blocked can still reach S3/DynamoDB), every such
-# route table needs a gateway-endpoint route for the service.
+# The EKS node/pod subnets sit on non-main route tables, and every such route
+# table needs a gateway-endpoint route for the service. The two services are here
+# for DIFFERENT reasons, and only S3 is about pod traffic:
+#
+#   S3       - pod traffic. Pods reach S3 (ES snapshots, app buckets) over the
+#              gateway endpoint; that is also what sets aws:SourceVpc and lets a
+#              strict default-deny cell with NAT blocked still reach S3.
+#
+#   DynamoDB - NOT pod traffic. No Pavo pod uses DynamoDB, which is why the strict
+#              egress NetworkPolicy in terraform-omnistrate-aws/network_policies.tf
+#              deliberately omits it. Do not let these two files drift apart. The
+#              one DynamoDB consumer in the design is pavo-tf-state-locks, the
+#              Terraform state lock table, and it only matters when Terraform runs
+#              INSIDE the VPC -- which is forced on a private-only cell, whose
+#              Kubernetes API has no public endpoint, so the bootstrap cannot be
+#              applied from outside at all.
+#
+# If the S3 backend ever moves to native locking (use_lockfile), nothing in-VPC
+# uses DynamoDB and this should lose its DynamoDB half entirely.
 #
 # Omnistrate provisions its own S3/DynamoDB gateway endpoints. It used to
 # associate them only with the VPC's MAIN route table, so this module covered ALL
