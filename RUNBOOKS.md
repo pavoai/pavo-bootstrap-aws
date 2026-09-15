@@ -182,8 +182,25 @@ bumps** (i.e. whenever `provider-mirror/versions.tf` changes in a new module ver
 
 ## S3 / DynamoDB gateway endpoints (adaptive coverage)
 
-The cell's node/pod route tables (all non-main route tables) need an S3/DynamoDB
-gateway-endpoint route so pod→S3/DynamoDB traffic stays private in-VPC. Omnistrate
+The cell's node/pod route tables (all non-main route tables) need a gateway-endpoint
+route so this traffic stays private in-VPC. The two services are carried for
+**different** reasons, and only one of them is about pods:
+
+- **S3** — pod traffic. Pods reach S3 (the ES snapshot bucket, app buckets) over the
+  gateway endpoint, which is also what sets `aws:SourceVpc` and lets a strict
+  default-deny cell with NAT blocked still reach S3.
+- **DynamoDB** — **not** pod traffic. No Pavo pod uses DynamoDB; the strict egress
+  NetworkPolicy in `terraform-omnistrate-aws/network_policies.tf` deliberately omits
+  it for exactly that reason, and the two files must not drift apart on this. The one
+  DynamoDB consumer in the design is `pavo-tf-state-locks`, the Terraform state lock
+  table (see "Configuring Terraform state" in the README). That only matters when
+  Terraform itself runs **inside** the VPC, which is the case on a private-only cell
+  whose Kubernetes API has no public endpoint and whose bootstrap therefore cannot be
+  applied from outside. Keep the endpoint as long as the S3 backend locks via
+  DynamoDB; if the backend ever moves to S3-native locking (`use_lockfile`), nothing
+  in-VPC uses DynamoDB and the endpoint should be dropped with it.
+
+Omnistrate
 provisions its own gateway endpoints; historically only on the main route table, so
 this module covered every non-main route table. That assumption broke: on some cells
 Omnistrate's endpoints already span non-main route tables, and a route table may
