@@ -97,40 +97,72 @@ locals {
     ["eks", "get-token", "--cluster-name", var.eks_cluster_name, "--region", data.aws_region.current.name, "--output", "json"],
     var.k8s_get_token_role_arn != "" ? ["--role-arn", var.k8s_get_token_role_arn] : [],
   )
+
+  # PRIVATE-CELL ESCAPE HATCH. A private-only deployment cell's Kubernetes API has
+  # no public endpoint (`endpointPublicAccess = false`), so the derived
+  # `data.aws_eks_cluster.primary.endpoint` is unreachable from outside the VPC and
+  # `aws eks get-token` authenticates against something that cannot be dialled.
+  # Setting `kubeconfig_path` points every Kubernetes-facing provider at a
+  # ready-made kubeconfig instead — in practice the one produced by
+  # `omnistrate-ctl deployment-cell update-kubeconfig <cell> --role cluster-admin`,
+  # which targets an Omnistrate-side proxy and uses client certificates rather than
+  # an exec plugin. That proxy path is gated by the account CloudFormation
+  # parameter `K8sDebugAccessEnabled`, so it is the customer's switch, not ours.
+  #
+  # Empty (the default) keeps the derived endpoint + exec behaviour unchanged, so
+  # every existing cell is unaffected.
+  use_kubeconfig = var.kubeconfig_path != ""
+  k8s_host       = local.use_kubeconfig ? null : data.aws_eks_cluster.primary.endpoint
+  k8s_ca         = local.use_kubeconfig ? null : base64decode(data.aws_eks_cluster.primary.certificate_authority[0].data)
+  # Drives `dynamic "exec"`: one element means render the block, zero means omit it
+  # entirely. A null-valued exec block is not the same thing and is rejected.
+  k8s_exec_blocks = local.use_kubeconfig ? [] : [1]
 }
 
 provider "kubernetes" {
-  host                   = data.aws_eks_cluster.primary.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.primary.certificate_authority[0].data)
+  host                   = local.k8s_host
+  cluster_ca_certificate = local.k8s_ca
+  config_path            = local.use_kubeconfig ? var.kubeconfig_path : null
 
-  exec {
-    api_version = local.eks_exec_api_version
-    command     = local.eks_exec_command
-    args        = local.eks_exec_args
+  dynamic "exec" {
+    for_each = local.k8s_exec_blocks
+    content {
+      api_version = local.eks_exec_api_version
+      command     = local.eks_exec_command
+      args        = local.eks_exec_args
+    }
   }
 }
 
 provider "kubectl" {
-  host                   = data.aws_eks_cluster.primary.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.primary.certificate_authority[0].data)
-  load_config_file       = false
+  host                   = local.k8s_host
+  cluster_ca_certificate = local.k8s_ca
+  load_config_file       = local.use_kubeconfig
+  config_path            = local.use_kubeconfig ? var.kubeconfig_path : null
 
-  exec {
-    api_version = local.eks_exec_api_version
-    command     = local.eks_exec_command
-    args        = local.eks_exec_args
+  dynamic "exec" {
+    for_each = local.k8s_exec_blocks
+    content {
+      api_version = local.eks_exec_api_version
+      command     = local.eks_exec_command
+      args        = local.eks_exec_args
+    }
   }
 }
 
 provider "helm" {
   kubernetes {
-    host                   = data.aws_eks_cluster.primary.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.primary.certificate_authority[0].data)
+    host                   = local.k8s_host
+    cluster_ca_certificate = local.k8s_ca
+    config_path            = local.use_kubeconfig ? var.kubeconfig_path : null
 
-    exec {
-      api_version = local.eks_exec_api_version
-      command     = local.eks_exec_command
-      args        = local.eks_exec_args
+    dynamic "exec" {
+      for_each = local.k8s_exec_blocks
+      content {
+        api_version = local.eks_exec_api_version
+        command     = local.eks_exec_command
+        args        = local.eks_exec_args
+      }
     }
   }
 }

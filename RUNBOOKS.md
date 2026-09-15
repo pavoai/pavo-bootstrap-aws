@@ -437,6 +437,62 @@ The status filter matters: `list-stacks` returns deleted stacks for 90 days, so
 an unfiltered name-only query can hand you a `DELETE_COMPLETE` stack from a
 previous onboarding attempt.
 
+#### Account CFN parameters that matter, and which ones the portal link gets wrong
+
+Values below read from the live template
+(`https://onboarding-cfv1.s3.amazonaws.com/org-<org-id>/account-config-setup-template.yaml`)
+on **2026-09-15**. Re-read it before an onboarding rather than trusting this
+table: Omnistrate change it without notice, and three parameters that existed on
+10 Sep (`PrivateArtifactRegistryAccountId`, `PrivateArtifactRegistryRegion`,
+`PrivateArtifactRepositoryPrefix`) were gone five days later.
+
+**The generated portal link is not authoritative.** It pre-fills parameters from
+the account config, and at least one of them contradicts the template default, so
+check every value on the stack-creation screen instead of clicking through.
+
+| Parameter | Template default | Standard cell | Private cell (BCNC shape) |
+|---|---|---|---|
+| `IsBYOCPrivateAccount` | `false` | `false` | **`true`** — selects the private EKS cluster and Lambda-based agent install |
+| `EnablePrivateArtifactRegistry` | `false` | `false` | **`true`** — without it the cell cannot read charts or images from the private registry, so nothing pulls |
+| `EnableECRHelmChartPull` | **`true`** | `true` | `true` — grants the dataplane-agent IRSA role read-only ECR so it can pull OCI charts via pod identity |
+| `CreateLoadBalancerPolicy` | `true` | see below | see below |
+| `K8sDebugAccessEnabled` | `default` | `default` | operator's call — see note |
+
+Two observed traps:
+
+- **`EnableECRHelmChartPull` is defaulted `true` by the template but set `false`
+  by the generated link** on at least one of our accounts (`388371826980`, both
+  the `cloudformation_url` and `cloudformation_url_no_lb` variants). A customer
+  who follows the link as sent gets the wrong value. Read the screen.
+
+The two are not the same gate and are worth keeping apart when debugging.
+`EnableECRHelmChartPull` grants the dataplane-agent IRSA role read-only ECR so it
+can pull **OCI Helm charts** by pod identity; symptom is a chart that will not
+resolve. `EnablePrivateArtifactRegistry` governs whether the cell may read from
+the private artifact registry **at all**, charts and images alike; symptom is
+`ImagePullBackOff` on everything. Only when both are wrong does nothing whatsoever
+pull.
+- **`EnablePrivateArtifactRegistry` is absent from the generated link entirely**,
+  so it silently takes the `false` default. This is the one most likely to be
+  missed, and it fails late: the stack applies fine and the cell then cannot read
+  charts or images from the private registry at all.
+
+`K8sDebugAccessEnabled` is worth surfacing to a security-conscious customer rather
+than setting quietly. It "controls BYOC PrivateLink Kubernetes debug access by
+mutating the management VPCE security group. true allows the regional K8S proxy
+port; false removes it; default leaves the existing setting unchanged." On a
+private-only cell that port is what makes `omnistrate-ctl deployment-cell
+update-kubeconfig <cell> --role cluster-admin` able to reach the Kubernetes API,
+which is in turn what lets this module be applied at all — a private cell's API
+has no public endpoint. It is a customer-held switch they can flip back, so let
+them make the call.
+
+Two further customer-held controls, both defaulting sensibly, both worth showing a
+customer who asks what leverage they retain: `AgentInfrastructureMutationEnabled`
+(default `true`; set `false` outside approved change windows to freeze Omnistrate
+out of infrastructure changes) and `DataplaneKubernetesAccessRole` (admin versus
+read-only for the Omnistrate agent).
+
 #### Never re-run with a *different* `CreateLoadBalancerPolicy` than Phase 1 used
 
 This is why "keep existing parameters" above matters, and it is the single most

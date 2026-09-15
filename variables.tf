@@ -405,3 +405,42 @@ variable "cert_manager_namespace" {
     error_message = "cert_manager_namespace must be a DNS-1123 label: lowercase alphanumerics and '-', starting and ending alphanumeric, at most 63 characters."
   }
 }
+
+variable "kubeconfig_path" {
+  description = <<-EOT
+    Path to a ready-made kubeconfig for every Kubernetes-facing provider
+    (kubernetes, kubectl, helm). Empty (the default) derives the endpoint from the
+    cluster and authenticates with `aws eks get-token`, which is correct for every
+    cell whose Kubernetes API is publicly reachable.
+
+    Set this only for a PRIVATE-ONLY cell. Such a cell has
+    `endpointPublicAccess = false`, so the derived endpoint resolves to private IPs
+    and cannot be dialled from outside the VPC, whatever IAM permissions the caller
+    holds. In practice the file comes from
+    `omnistrate-ctl deployment-cell update-kubeconfig <cell> --role cluster-admin`,
+    which targets an Omnistrate-side proxy and uses client certificates instead of
+    an exec plugin. That proxy port is gated by the account CloudFormation
+    parameter `K8sDebugAccessEnabled`, so whether this path exists at all is the
+    customer's decision.
+
+    The file must already be valid when Terraform runs: it is read by the
+    providers, not produced by them. Credentials in it are short-lived, so refresh
+    it before a long apply rather than reusing a stale one.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    # A kubeconfig is only consulted when non-empty, so a typo'd path would
+    # otherwise fall through to the derived endpoint and fail later with a
+    # confusing connection error against an unreachable private API.
+    # try() rather than a bare `||`: validation conditions are NOT guaranteed to
+    # short-circuit, so `fileexists("")` is evaluated even when the left side is
+    # already true. It does not return false, it ERRORS ("." is a directory, not
+    # a file), which fails the whole validate rather than the validation. Newer
+    # Terraform short-circuits and hides this; CI pins 1.9.8, which does not.
+    # Same family of trap as the `&&` note in cell_gates.tf.
+    condition     = var.kubeconfig_path == "" || try(fileexists(var.kubeconfig_path), false)
+    error_message = "kubeconfig_path must point at an existing file (or be empty to derive the endpoint from the cluster)."
+  }
+}

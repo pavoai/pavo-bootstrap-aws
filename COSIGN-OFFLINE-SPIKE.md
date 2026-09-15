@@ -118,6 +118,71 @@ reset steps between cases instead, and show the registry is clean before each.
    - a wrong-signer image and a missing-attestation image are **rejected**;
    - no connection to any Sigstore endpoint was attempted during either.
 
+## Step 1 results — 2026-09-15: SET IS PRESENT, offline verify works
+
+Step 1 only. Steps 2–4 (mirrored TrustRoot, test policy, egress block, admission
+assertions) have **not** been run.
+
+Method note: the bundle annotations were read straight off the registry with
+`crane manifest` rather than inferred from a `cosign verify` exit code. Local
+cosign is **v3.0.6**, and this document warns that a v3 binary exercises OCI 1.1
+Referrers rather than the tag-based scheme admission uses — so a v3 pass on its
+own would not have been evidence. Reading the annotation is format-independent.
+
+Fixture: `ghcr.io/pavoai/intern@sha256:66b384d00ef91bf466403addf640fc5205026d2a93ab6ab0e2698f33950f7228`
+(the `temporal_codec_image` pinned on awstest).
+
+**Storage scheme is tag-based** (`sha256-<digest>.sig` / `.att`), i.e. cosign v2
+semantics, which policy-controller 0.10.6 discovers. The v3 Referrers hazard does
+not apply to what the pipeline currently produces.
+
+Two independent evidence sources, kept apart deliberately. The bundle column is
+read from the registry with `crane manifest`; the verify column is a cosign exit
+code. Both were actually run; neither is inferred from the other.
+
+| Artifact | Bundle evidence (`crane manifest`) | Rekor logIndex | Cosign command run | Result |
+| --- | --- | --- | --- | --- |
+| signature | `SignedEntryTimestamp` present | 2602195414 | `cosign verify --offline` | pass |
+| CycloneDX SBOM attestation | `SignedEntryTimestamp` present | 2602196781 | `cosign verify-attestation --offline --type cyclonedx` | pass |
+| cosign-vuln attestation | `SignedEntryTimestamp` present | 2602197921 | `cosign verify-attestation --offline --type vuln` | pass |
+
+All three run against the per-service identity
+`cloud-build-intern@onboarding-455713.iam.gserviceaccount.com` with
+`--certificate-oidc-issuer https://accounts.google.com`.
+
+Two things worth recording beyond the pass/fail:
+
+- **`inclusionProof` is absent from every bundle.** Exactly as this document
+  predicted: the legacy `dev.sigstore.cosign/bundle` format carries the SET and
+  nothing stronger. So the guarantee we can claim is "Rekor signed that it
+  accepted this entry at time T", **not** log inclusion. State the weaker
+  guarantee to security reviewers; do not describe it as transparency-log
+  inclusion.
+- **The shared-transition identity does not match this image.** Verifying as
+  `cloud-build@onboarding-455713...` fails with "none of the expected identities
+  matched ... got subjects [cloud-build-intern@...]". That is the correct result
+  and it means `intern` has already migrated to its per-service signer. It is
+  **not** evidence that the transition authority can be dropped — that needs the
+  same check across every service in `image-manifest.json`.
+
+**Consequence for the decision, scoped to what was tested.** One image, one
+signer. The "SET absent" branch is ruled out **for the `intern` fixture**, which
+is enough to say the pipeline is capable of producing offline-verifiable bundles
+and therefore enough to stop treating keyful signing as the likely answer. It is
+**not** enough to conclude that every image in `image-manifest.json` carries a
+SET.
+
+That distinction has a real failure mode: a `TrustRoot` rollout verifies every
+admitted image, so a single service whose bundles lack a SET would be rejected at
+admission after the switch, not before. **Complete the matrix — every service in
+`image-manifest.json` × both signer identities × all three artifact types —
+before wiring `trustRootRef`.** `scripts/audit-cosign-pre-enforce.sh` already
+walks the image list and is the natural place to add the check.
+
+One conclusion does generalise safely: Omnistrate's pending artifact re-signing
+does not gate us either way, because we sign and push our own images and cosign
+stores the signature beside the image in the same repository.
+
 ## Outcomes and recommendation
 
 - **If the SET is present (expected):** ship a `TrustRoot` (mirrored public-good
