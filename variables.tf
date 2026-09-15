@@ -363,3 +363,45 @@ variable "cell_kms_key_arn" {
   type        = string
   default     = ""
 }
+
+variable "cert_manager_namespace" {
+  description = <<-EOT
+    Namespace cert-manager runs in, which is also its cluster-resource namespace —
+    where a CA-type ClusterIssuer reads the keypair Secret the private CA depends
+    on.
+
+    Defaults to `cert-manager-ns`, NOT `cert-manager`. cert-manager is an
+    Omnistrate-managed deployment-cell amenity and they install it into
+    `cert-manager-ns`; its controller runs with
+    `--cluster-resource-namespace=$(POD_NAMESPACE)`, so the cluster-resource
+    namespace follows the release namespace. Verified on hc-fmnwao4ct and
+    hc-d75sozh69, 2026-09-15.
+
+    Override only if a cell runs cert-manager somewhere else.
+
+    CHANGING THIS ON A CELL THAT ALREADY HAS THE CA IS NOT A MOVE, IT IS A NEW CA.
+    The root and intermediate Secrets are created by cert-manager in whichever
+    namespace this names, and the CA objects are apply_only, so pointing at a
+    different namespace mints a fresh root and intermediate rather than reusing
+    the existing keys. Every certificate issued under the old root then fails to
+    validate against the new one, and the old root stays installed on customer
+    devices via MDM. If a cell ever needs to move namespaces, copy
+    `pavo-cell-root-ca` and `pavo-cell-intermediate-ca` across first and treat it
+    as a deliberate rollover.
+
+    Not a concern for the default change from `cert-manager` to `cert-manager-ns`:
+    no cell has ever had `install_private_ca = true`, so no CA key material exists
+    to preserve (verified on hc-fmnwao4ct and hc-d75sozh69, 2026-09-15).
+  EOT
+  type        = string
+  default     = "cert-manager-ns"
+
+  validation {
+    # DNS-1123 label, which is what Kubernetes enforces on a namespace name.
+    # Length alone was not enough: "Cert-Manager", "cert-manager_" and a 70-char
+    # name all passed here and then failed at apply against the API server, which
+    # is a worse place to find out.
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.cert_manager_namespace)) && length(var.cert_manager_namespace) <= 63
+    error_message = "cert_manager_namespace must be a DNS-1123 label: lowercase alphanumerics and '-', starting and ending alphanumeric, at most 63 characters."
+  }
+}

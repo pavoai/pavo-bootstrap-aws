@@ -14,7 +14,8 @@
 #
 # The root does NOT sign leaves directly, so rotating the intermediate never
 # forces re-pushing the root (which customers install via MDM). All objects live
-# in cert-manager's cluster-resource namespace (`cert-manager`), where a CA-type
+# in cert-manager's cluster-resource namespace (see `var.cert_manager_namespace`
+# — it is NOT `cert-manager`), where a CA-type
 # ClusterIssuer reads its keypair Secret — the same namespace the ACME
 # ClusterIssuer keeps its account key. The cert-manager Certificate controllers
 # PRODUCE the key Secrets; Terraform never creates them (one owner of the key
@@ -27,7 +28,7 @@
 
 locals {
   private_ca_count          = var.install_private_ca ? 1 : 0
-  private_ca_namespace      = "cert-manager"
+  private_ca_namespace      = var.cert_manager_namespace
   private_ca_root_secret    = "pavo-cell-root-ca"
   private_ca_int_secret     = "pavo-cell-intermediate-ca"
   private_ca_cluster_issuer = "pavo-private-ca"
