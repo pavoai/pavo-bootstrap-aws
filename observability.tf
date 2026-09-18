@@ -1,8 +1,8 @@
 # =============================================================================
 # In-VPC observability stack (cell-scoped, opt-in via var.enable_observability)
 # =============================================================================
-# For customers whose telemetry must not leave the VPC (grafana_mode=self_hosted,
-# e.g. BCBSNC). Installs, into the `pavo-observability` namespace:
+# For customers whose telemetry must not leave the VPC (grafana_mode=self_hosted).
+# Installs, into the `pavo-observability` namespace:
 #   - Postgres        (Grafana metadata backend)
 #   - Prometheus      (in-VPC TSDB; scrapes ES exporter + KSM + node-exporter;
 #                      accepts remote-write from the OTel collector)
@@ -336,7 +336,7 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
 # So the pods legitimately cannot start yet, the default waits time out, and the
 # whole apply fails on infrastructure that is otherwise perfectly correct.
 #
-# That is exactly what happened on the Coursera onboarding: the operator had to
+# That is exactly what happened on an early customer onboarding: the operator had to
 # apply once with enable_observability = false, wait for the cell to reach
 # RUNNING, then flip it to true and apply again. Encoding a manual two-phase
 # dance as a customer-facing instruction is the bug; these flags remove it.

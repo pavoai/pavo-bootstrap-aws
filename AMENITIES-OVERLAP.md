@@ -14,7 +14,7 @@ $ aws eks describe-cluster --name hc-d75sozh69 \
 { "pub": false, "priv": true }
 ```
 
-Every cell before it (`hc-fmnwao4ct` and the Coursera cell included) had
+Every cell before it (`hc-fmnwao4ct` and an earlier customer cell included) had
 `endpointPublicAccess: true` with `0.0.0.0/0`. This module configures Kubernetes
 resources, so on a private-only cell it **cannot be applied from outside the
 VPC** — `kubectl` times out even with a cluster-admin access entry granted.

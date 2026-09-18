@@ -289,9 +289,9 @@ withheld from the provisioning role — listed in `BOUNDARY_ONLY_SIDS` in
 - `BedrockInvokeScopedToModels` (`bedrock:InvokeModel*`, scoped to the two Claude
   models) — runtime model invocation is the **app workload's** job. The
   provisioning role only sets up infrastructure and must never hold model-invoke
-  rights (Coursera BYOC review finding #13). It stays in the boundary (which caps
-  the workload role that *does* invoke) but is excluded from the provisioning
-  role's policy.
+  rights (raised in an enterprise BYOC security review). It stays in the boundary
+  (which caps the workload role that *does* invoke) but is excluded from the
+  provisioning role's policy.
 
 The provisioning role also holds **no** Bedrock agreement / use-case actions, so
 accepting the Claude model-use agreement is a one-time customer onboarding step,
@@ -361,8 +361,8 @@ assertions. Two runner-only ElastiCache cases sat failing on `main` unnoticed
 until someone ran it by hand.
 
 The job federates to AWS via OIDC using the role in repo variable
-`POLICY_SIMULATE_ROLE_ARN` (`pavo-terraform-templates-policy-simulate` in
-`453542520145`), whose only permission is `iam:SimulateCustomPolicy` and which
+`POLICY_SIMULATE_ROLE_ARN` (`pavo-terraform-templates-policy-simulate` in our
+CI account), whose only permission is `iam:SimulateCustomPolicy` and which
 carries a permissions boundary capping it there. `simulate-custom-policy` takes
 the policy document as **input** and reads no account state, so the role can see
 nothing and change nothing, and the verdict is account-independent. Like
@@ -566,7 +566,7 @@ aws efs describe-tags --file-system-id <fs-id-from-step-1>
 terraform -chdir=pavo-bootstrap-aws apply
 ```
 
-New customers (e.g. Coursera): no migration needed. They get the tightened
+New customers: no migration needed. They get the tightened
 boundary on first apply — `terraform-omnistrate-aws` provider default_tags
 applies `managed_by=pavo` to every EFS file system on creation.
 
@@ -975,7 +975,7 @@ explicit workload/ESO grants on top:
    work — RDS resolves either at instance creation time. **Aliases are
    accepted for create-time convenience only — not for rotation.** Reasons to
    use an alias: readable naming in the Omnistrate UI
-   (`alias/coursera-pavo-db` vs a UUID); environment-agnostic spec values if
+   (`alias/<customer>-pavo-db` vs a UUID); environment-agnostic spec values if
    you use the same alias name across dev/prod; consistency with your
    existing alias-based KMS naming convention. RDS resolves the alias to a
    specific key ARN at creation and is bound to that key for the instance's
@@ -1027,8 +1027,8 @@ possible one.
 
 ## In-VPC observability (self-hosted Grafana / Prometheus / OTel)
 
-For customers whose telemetry must not leave the VPC (`grafana_mode = self_hosted`,
-e.g. BCBSNC). Opt-in per cell — a cloud-observability cell must not run an unused
+For customers whose telemetry must not leave the VPC (`grafana_mode = self_hosted`).
+Opt-in per cell — a cloud-observability cell must not run an unused
 monitoring stack. Everything installs from this module's single `terraform apply`
 into the `pavo-observability` namespace: Prometheus (in-VPC TSDB), Grafana
 (internal `pavo-nginx` ingress, dashboards-as-code), Postgres (Grafana backend),
@@ -1085,7 +1085,7 @@ scheduler must pick a node BEFORE the EBS volume is provisioned and the PVC
 binds — with no schedulable node, provisioning never starts and the PVC stays
 Pending. The pods legitimately cannot start yet. The providers'
 default readiness waits then timed out and failed the apply on infrastructure
-that was otherwise perfectly correct, so the workaround during the Coursera
+that was otherwise perfectly correct, so the workaround during an early customer
 onboarding was: apply with `enable_observability = false`, wait for the cell to
 reach RUNNING, flip it to `true`, apply again.
 

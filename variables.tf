@@ -233,9 +233,9 @@ variable "customer_alert_webhook_url" {
 variable "pavo_alert_webhook_url" {
   description = <<-EOT
     Pavo's alert-ingest URL the sanitizer forwards 9-key metadata to (DESTINATION_URL
-    via a Secret, never a literal). SECRET: the forwarder authenticates by URL path
-    (the sanitizer sends no auth header), so this embeds the path secret —
-    https://pavo-alerts.pavoai.dev/h/<secret>. Required when pavo_app_alerts_enabled = true.
+    via a Secret, never a literal). SECRET: the URL embeds a component that
+    authenticates the request, so treat the whole value as a credential and supply it
+    via TF_VAR at apply. Required when pavo_app_alerts_enabled = true.
   EOT
   type        = string
   default     = ""

@@ -425,7 +425,7 @@ resource "aws_ssm_parameter" "network_policy_ready" {
 # wait = false / wait_for_rollout = false on purpose, because on a brand-new cell
 # they legitimately cannot schedule until Omnistrate creates worker nodes, and
 # blocking the customer's Phase-3 apply on that is what forced the manual
-# two-phase toggle during the Coursera onboarding.
+# two-phase toggle during an early customer onboarding.
 #
 # So this parameter answers "is there supposed to be a receiver here?", which is
 # what an instance needs in order to fail fast on a misconfiguration
