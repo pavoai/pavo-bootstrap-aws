@@ -93,8 +93,7 @@ It creates (naming convention — do not hand-name):
 | State key (per cell) | `pavo-bootstrap-aws/<cluster>/terraform.tfstate` | |
 
 Then commit a per-cell backend file and init against it (this is what the
-committed `cells/<cluster>/backend.s3.tfbackend` files are — e.g.
-`cells/hc-fmnwao4ct/`):
+committed `cells/<cluster>/backend.s3.tfbackend` files look like):
 
 ```hcl
 # cells/<cluster>/backend.s3.tfbackend
