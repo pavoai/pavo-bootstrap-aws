@@ -146,7 +146,7 @@ serverFiles:
       - job_name: kubernetes-cadvisor
         scheme: https
         # Verify the kubelet's serving cert against the cluster CA — EKS signs it
-        # and includes the node InternalIP in the SANs (confirmed on hc-fmnwao4ct),
+        # and includes the node InternalIP in the SANs (confirmed on an internal test cell),
         # so the bearer token is never sent to an unverified/impersonated endpoint.
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt

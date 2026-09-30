@@ -27,7 +27,7 @@ variable "eks_oidc_provider" {
 }
 
 variable "runner_role_arn" {
-  description = "IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the underlying role ARN (arn:aws:iam::<acct>:role/<RoleName>), NOT an assumed-role session ARN. See README → 'Onboarding a new AWS BYOC cell' for how to obtain it."
+  description = "IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the underlying role ARN (arn:aws:iam::<acct>:role/<RoleName>), NOT an assumed-role session ARN. See README → 'How to get runner_role_arn' for how to obtain it."
   type        = string
 
   validation {
@@ -374,8 +374,8 @@ variable "cert_manager_namespace" {
     Omnistrate-managed deployment-cell amenity and they install it into
     `cert-manager-ns`; its controller runs with
     `--cluster-resource-namespace=$(POD_NAMESPACE)`, so the cluster-resource
-    namespace follows the release namespace. Verified on hc-fmnwao4ct and
-    hc-d75sozh69, 2026-09-15.
+    namespace follows the release namespace. Verified on two internal test
+    cells, 2026-09-15.
 
     Override only if a cell runs cert-manager somewhere else.
 
@@ -391,7 +391,7 @@ variable "cert_manager_namespace" {
 
     Not a concern for the default change from `cert-manager` to `cert-manager-ns`:
     no cell has ever had `install_private_ca = true`, so no CA key material exists
-    to preserve (verified on hc-fmnwao4ct and hc-d75sozh69, 2026-09-15).
+    to preserve (verified on two internal test cells, 2026-09-15).
   EOT
   type        = string
   default     = "cert-manager-ns"

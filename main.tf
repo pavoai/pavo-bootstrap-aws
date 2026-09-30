@@ -347,7 +347,7 @@ resource "helm_release" "external_secrets" {
 # — unnecessary on cells with only Elastic-Cloud instances, where an idle
 # operator + CRDs + validating webhook would add avoidable surface.
 #
-# Deliberately NOT here (validated live on hc-fmnwao4ct):
+# Deliberately NOT here (validated live on an internal test cell):
 #   - vm.max_map_count sysctl (ES >= 8.16 prereq): the Omnistrate node AMI is
 #     Bottlerocket, which already ships vm.max_map_count=1048576. No DaemonSet.
 #   - S3 gateway VPC endpoint for snapshots: Omnistrate already provisions one

@@ -178,7 +178,7 @@ Run **`scripts/preflight.sh`** before `terraform init`. It **requires a mode**:
   and cannot validate your caller auth. See *Consuming as a child module* below.
 
 ```bash
-export EKS_CLUSTER_NAME=hc-fmnwao4ct  # your cluster name
+export EKS_CLUSTER_NAME=<your-cluster-name>
 export AWS_REGION=us-east-1           # your region
 ./scripts/preflight.sh --mode=direct
 ```
@@ -423,7 +423,7 @@ module owns the resource, who applies it, and where state lives.
 |---|---|---|---|---|
 | **Account** | `pavo-bootstrap-aws/` (AWS only) | Customer (AWS creds) | Customer-local | IAM permission boundaries, `/pavo/shared/*` SSM |
 | **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` (AWS only) | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
-| **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | GCS `gs://pavo-terraform-state`, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
+| **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | Pavo-owned GCS bucket, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
 | **Instance** (one Pavo deployment) | `terraform-omnistrate-aws/` (AWS)<br>`terraform-omnistrate-gcp/` (GCP) | Omnistrate runner | Omnistrate-managed | AWS: RDS, ElastiCache, S3, SNS/SQS, EFS, workload IAM role.<br>GCP: Cloud SQL, Memorystore, GCS, Pub/Sub, workload service account.<br>Both: per-instance namespace, app secrets, Elastic Cloud deployment |
 
 Account and Cell scope are AWS-only today: GCP has no cell-bootstrap module, so a

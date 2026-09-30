@@ -6,7 +6,7 @@
 # panel is empty (harmless). Queries follow temporalio/dashboards + the LLD's
 # SLO targets (StartWorkflowExecution p95 < 150ms, schedule-to-start p95
 # < 150ms, shard lock latency < 1ms, throughput = state transitions/s).
-# Worker SDK series (temporal_*) verified on instance-drys9yzpf; server-side
+# Worker SDK series (temporal_*) verified on an internal test instance; server-side
 # series are unverified — validate against a live cell on first apply.
 #
 # "Shards owned" thresholds hardcode 128 (green only at 128). The value comes
