@@ -76,7 +76,7 @@ things** because the EBS CSI driver's role must be allowed to use your key:
 > per-key gate.**
 
 Then reference the CMK-backed `gp3-cmk` StorageClass in your PVCs. (On a cell
-whose key already delegates to account root — e.g. our `awstest` — the IAM side
+whose key already delegates to account root — e.g. Pavo's internal test cell — the IAM side
 alone provisions CMK volumes; the tag + key policy matter for locked-down
 customer keys.)
 
@@ -177,7 +177,6 @@ bumps** (i.e. whenever `provider-mirror/versions.tf` changes in a new module ver
 > `scripts/render-mirror-providers.py` from `terraform-omnistrate-aws/providers.tf`
 > in the source monorepo; CI (`check-policy-drift`) fails if it drifts. Do not hand-edit it.
 
-
 ---
 
 ## S3 / DynamoDB gateway endpoints (adaptive coverage)
@@ -240,7 +239,6 @@ aws ec2 describe-vpc-endpoints --filters \
   "Name=tag:omnistrate.com/managed-by,Values=omnistrate" \
   --query 'VpcEndpoints[].{id:VpcEndpointId,rts:RouteTableIds}'
 ```
-
 
 ---
 
@@ -450,7 +448,7 @@ table: Omnistrate change it without notice, and three parameters that existed on
 the account config, and at least one of them contradicts the template default, so
 check every value on the stack-creation screen instead of clicking through.
 
-| Parameter | Template default | Standard cell | Private cell (BCNC shape) |
+| Parameter | Template default | Standard cell | Private cell (strict / air-gapped shape) |
 |---|---|---|---|
 | `IsBYOCPrivateAccount` | `false` | `false` | **`true`** — selects the private EKS cluster and Lambda-based agent install |
 | `EnablePrivateArtifactRegistry` | `false` | `false` | **`true`** — without it the cell cannot read charts or images from the private registry, so nothing pulls |
@@ -461,8 +459,8 @@ check every value on the stack-creation screen instead of clicking through.
 Two observed traps:
 
 - **`EnableECRHelmChartPull` is defaulted `true` by the template but set `false`
-  by the generated link** on at least one of our accounts (`388371826980`, both
-  the `cloudformation_url` and `cloudformation_url_no_lb` variants). A customer
+  by the generated link** on at least one of Pavo's test accounts (both the
+  `cloudformation_url` and `cloudformation_url_no_lb` variants). A customer
   who follows the link as sent gets the wrong value. Read the screen.
 
 The two are not the same gate and are worth keeping apart when debugging.
@@ -535,40 +533,6 @@ aws cloudformation continue-update-rollback --stack-name <STACK> --region <REGIO
 Then re-run the update **with `CreateLoadBalancerPolicy` set to the value Phase 1
 used** (normally `false` for any account that hit this), or with
 `UsePreviousValue: true`.
-
-### Migrating existing customers when boundary changes
-
-Customers who applied this module **before** the EFS tag-scoping change need a
-one-time tag backfill on the existing EFS file system, **before** re-applying
-the bootstrap with the new boundary. Without the backfill, the new boundary
-would block all mutations on the pre-existing un-tagged file system.
-
-For `awstest`:
-
-```bash
-# 1. Find the awstest EFS file system ID.
-aws efs describe-file-systems --region us-east-1 \
-  --query "FileSystems[?starts_with(Name, 'pavo-efs-')].FileSystemId" --output text
-
-# 2. Backfill all 4 Pavo standard tags (use the actual instance ID for omnistrate_instance).
-aws efs tag-resource \
-  --resource-id <fs-id-from-step-1> \
-  --tags \
-    Key=managed_by,Value=pavo \
-    Key=customer,Value=awstest \
-    Key=environment,Value=prod \
-    Key=omnistrate_instance,Value=<awstest-omnistrate-instance-id>
-
-# 3. Verify all 4 tags present.
-aws efs describe-tags --file-system-id <fs-id-from-step-1>
-
-# 4. Re-apply the bootstrap module (refreshes the permission boundary in IAM).
-terraform -chdir=pavo-bootstrap-aws apply
-```
-
-New customers: no migration needed. They get the tightened
-boundary on first apply — `terraform-omnistrate-aws` provider default_tags
-applies `managed_by=pavo` to every EFS file system on creation.
 
 ---
 
@@ -675,14 +639,14 @@ pools**, only the tainted system pool. Fine for the bootstrap operators (they
 tolerate the taint, above), but it would **deadlock a self-hosted-ES first
 deploy**: `pavoInfra`'s own ES/init-db pods need a workload node, yet the pools
 that would supply one are created by app resources that only deploy *after*
-`pavoInfra` succeeds. A cell that has deployed before (e.g. `awstest`) already has
+`pavoInfra` succeeds. A cell that has deployed before already has
 pools from prior deploys and never hits this.
 
 **Resolved by the `pavo-compute-anchor` resource.** It declares `compute` with
 **no `dependsOn`**, so Omnistrate deploys it first and its pool supplies the
 initial untainted workload node before `pavoInfra` runs; `pavoInfra` and the app
-helms all depend on it. See
-[`charts/pavo-compute-anchor/README.md`](../charts/pavo-compute-anchor/README.md).
+helms all depend on it. The anchor is part of Pavo's Omnistrate service
+definition, not of this module.
 
 > **Interim (per-helm compute).** The app helms (ingress-nginx, api-gateway,
 > intern, frontend, onboarding-copy, tribal-knowledge, capability-proxy) currently
@@ -760,7 +724,7 @@ One CMK per cell encrypts **everything** — RDS storage, the RDS-managed master
 secret, and (on self-hosted cells) the ES / in-VPC-observability EBS volumes.
 Its ARN is the instance `cell_kms_key_arn` apiParameter. There are two cases:
 
-### Quick setup: same-account key (dev/test, e.g. `awstest`) — `scripts/create-cmk.sh`
+### Quick setup: same-account key (dev/test cells) — `scripts/create-cmk.sh`
 
 When the workload + ESO roles live in the **same account** as the key, a plain
 key with the **default policy (root → `kms:*`)** is sufficient: those roles get
@@ -1217,39 +1181,3 @@ For an urgent fix without a release, apply the ConfigMap directly:
 `kubectl apply -f observability/manifests/<dashboard>.yaml -n pavo-observability`
 (and back-port the edit into the module so the next apply doesn't revert it).
 
-## Adding a cell-level readiness gate (two changes, never one)
-
-`pavo-bootstrap-aws` publishes `/pavo/cells/<cluster>/<marker>` and is applied
-**per cell, by the customer, on their schedule**. `terraform-omnistrate-aws`
-consumes those markers and ships with **every Omnistrate release**. Two
-pipelines, wildly different speeds, so a single commit that adds both a marker
-and the gate requiring it is not atomic in production. The gate reaches
-instances immediately; the marker reaches a cell only when someone re-bootstraps
-it, and every cell in between fails.
-
-This is not hypothetical. #369 added `observability_ready` and its `pavoInfra`
-precondition in one commit on 2026-08-31. awstest went `FAILED` the same day
-with `.../observability_ready does not exist`. The gate was correct; the
-ordering was not. The observability stack had in fact been installed on that
-cell for 41 days — only the marker was missing.
-
-**The procedure:**
-
-1. Add the producer to `pavo-bootstrap-aws` and merge it. Nothing consumes it
-   yet, so this is inert.
-2. Re-bootstrap every cell that will later be asked for the marker. awstest
-   reconciles itself via `Release Omnistrate Bootstrap Dev`; customer cells are
-   customer-applied and must be done deliberately.
-3. Only then add the gate to `terraform-omnistrate-aws`.
-
-`scripts/check-cell-marker-ordering.py` enforces step 1 before step 3 in CI: a
-marker referenced by a consumer must already exist as a producer on the base
-branch. "Producer" means specifically `resource "aws_ssm_parameter" { name = … }`
-— it parses the HCL rather than grepping it, so a `data "aws_ssm_parameter"`
-(which reads the marker), a `locals` block, an `output`, a comment or a heredoc
-naming the same path does not count as publishing it.
-
-**What CI cannot enforce:** step 2. BYOC cells live in customer AWS accounts
-this repo has no credentials for, so whether a cell has actually applied the
-producer is not observable from here. That step stays a human one, and it is the
-step that actually protects customers.
