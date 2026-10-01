@@ -13,8 +13,19 @@ locals {
   # them, and including them blew the boundary past the 6144 IAM policy-size cap.
   # scope="runner" → runner policy only (spec CUSTOM_TERRAFORM_POLICY); the
   # runner role is not bounded by this boundary. Absent scope = shared (both).
+  #
+  # A scope="boundary" statement may also carry "switch": "<variable>". It is
+  # then in the boundary only while that variable is true. Every switch name
+  # must be a key below (fail-closed, see the precondition on the policy), and
+  # scripts/render-policy.sh --disable <switch> renders the same filter. Absent
+  # switch = always included.
+  boundary_switches = {
+    allow_lambda_microvms = var.allow_lambda_microvms
+  }
+
   boundary_statements = [
-    for s in local.policy_statements : s if lookup(s, "scope", "shared") != "runner"
+    for s in local.policy_statements : s
+    if lookup(s, "scope", "shared") != "runner" && lookup(local.boundary_switches, lookup(s, "switch", ""), true)
   ]
 
   # The bootstrap operators (ESO, ECK, policy-controller, reloader) are cluster
@@ -82,6 +93,19 @@ resource "aws_iam_policy" "pavo_permission_boundary" {
         contains(["shared", "runner", "boundary"], lookup(s, "scope", "shared"))
       ])
       error_message = "policy-statements.json: every statement's \"scope\" must be one of shared|runner|boundary (absent = shared)."
+    }
+
+    # Same for "switch": a misspelt name must not silently keep a statement in,
+    # and a switch on a shared statement would still reach the runner policy
+    # unconditionally (sync-policy-to-spec.py has no switches), so only
+    # scope="boundary" statements may carry one. Mirrored in render-policy.sh.
+    precondition {
+      condition = alltrue([
+        for s in local.policy_statements :
+        contains(concat([""], keys(local.boundary_switches)), lookup(s, "switch", ""))
+        && (lookup(s, "switch", "") == "" || lookup(s, "scope", "shared") == "boundary")
+      ])
+      error_message = "policy-statements.json: every \"switch\" must name a key of local.boundary_switches and sit on a scope=\"boundary\" statement."
     }
   }
 }
@@ -502,8 +526,22 @@ resource "helm_release" "stakater_reloader" {
 # pd-balanced StorageClass (cell-scoped, cluster-wide)
 # ============================================================================
 # Alias for EBS gp3 — name matches the GCP convention used by connector PVCs.
+#
+# pd_balanced_use_cell_key = true encrypts new volumes with the cell key, set
+# exactly as the gp3-cmk StorageClass does (observability.tf). StorageClass
+# parameters are immutable (ForceNew), so flipping the flag on an existing cell
+# replaces this class; volumes already provisioned keep their encryption.
 
 resource "kubernetes_storage_class_v1" "ebs_gp3" {
+  # Fail fast without the key: an empty kmsKeyId would silently fall back to
+  # provisioner-default encryption.
+  lifecycle {
+    precondition {
+      condition     = !var.pd_balanced_use_cell_key || var.cell_kms_key_arn != ""
+      error_message = "cell_kms_key_arn must be set when pd_balanced_use_cell_key = true."
+    }
+  }
+
   metadata {
     name = "pd-balanced"
     annotations = {
@@ -516,9 +554,13 @@ resource "kubernetes_storage_class_v1" "ebs_gp3" {
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
 
-  parameters = {
-    type = "gp3"
-  }
+  parameters = merge(
+    { type = "gp3" },
+    var.pd_balanced_use_cell_key ? {
+      encrypted = "true"
+      kmsKeyId  = var.cell_kms_key_arn
+    } : {},
+  )
 
   depends_on = [
     aws_ssm_parameter.single_cell_guard,
