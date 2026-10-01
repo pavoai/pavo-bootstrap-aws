@@ -173,6 +173,7 @@
   {
     "sid": "LambdaMicrovmsLifecycle",
     "scope": "boundary",
+    "switch": "allow_lambda_microvms",
     "effect": "Allow",
     "actions": [
       "lambda:RunMicrovm",
@@ -193,8 +194,9 @@
   },
   {
     "sid": "LambdaMicrovmsPassConnector",
-    "comment": "Resource MUST be '*': RunMicrovm implicitly attaches the INTERNET_EGRESS network connector and the authorizer checks lambda:PassNetworkConnector against it, but rejects every resource-scoped form of that ARN (the implicit connector exposes no stable account-scoped ARN to name). Without this, RunMicrovm fails AccessDenied even when the lifecycle grants are correct. This is a ceiling, not a grant: it only caps what an identity policy may allow. The matching identity-policy statement in terraform-omnistrate-aws/main.tf is UNCONDITIONAL as of the 2026-08-18 deploy-window fix (gating it on the per-instance enable_lambda_microvms parameter revoked the grants for 28-79 minutes on every deploy), so the effective permission of a workload role is decided here. Note this entry is itself unconditional, so every account bootstrapped from this version raises the ceiling - it is NOT a per-account opt-in; accounts whose boundary predates it cap those identity grants to nothing.",
+    "comment": "Resource MUST be '*': RunMicrovm implicitly attaches the INTERNET_EGRESS network connector and the authorizer checks lambda:PassNetworkConnector against it, but rejects every resource-scoped form of that ARN (the implicit connector exposes no stable account-scoped ARN to name). Without this, RunMicrovm fails AccessDenied even when the lifecycle grants are correct. This is a ceiling, not a grant: it only caps what an identity policy may allow. Both MicroVM statements carry \"switch\": \"allow_lambda_microvms\": pavo-bootstrap-aws puts them in the boundary only while var.allow_lambda_microvms is true (the default). Set it false on cells that don't use Lambda MicroVMs.",
     "scope": "boundary",
+    "switch": "allow_lambda_microvms",
     "effect": "Allow",
     "actions": [
       "lambda:PassNetworkConnector"
