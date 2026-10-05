@@ -178,7 +178,7 @@ Run **`scripts/preflight.sh`** before `terraform init`. It **requires a mode**:
   and cannot validate your caller auth. See *Consuming as a child module* below.
 
 ```bash
-export EKS_CLUSTER_NAME=<your-cluster-name>
+export EKS_CLUSTER_NAME=hc-fmnwao4ct  # your cluster name
 export AWS_REGION=us-east-1           # your region
 ./scripts/preflight.sh --mode=direct
 ```
@@ -198,8 +198,6 @@ export AWS_REGION=us-east-1           # your region
 | `central_ci_project_id` | GCP project hosting Pavo's central Cloud Build that builds + signs all `ghcr.io/pavoai/*` images. Default `onboarding-455713`. The per-service signing SAs live here as `cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com`. Override only if you've forked the signing pipeline into a different GCP project. |
 | `enable_eck` | Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. **Default `false`.** Set `true` **only** on a cell that will host a self-hosted in-VPC Elasticsearch instance (`es_mode = self_hosted`). Cloud-Elasticsearch-only cells should leave it off to avoid an idle operator, CRDs, and validating webhook. When `true`, the cell publishes `/pavo/cells/<eks_cluster_name>/eck_ready=true`; the per-instance module reads that and **fails fast** if a `self_hosted` instance is created before ECK exists. |
 | `eck_operator_chart_version` | Helm chart version for `elastic/eck-operator` (operator + CRDs move in lockstep). Default `3.4.0`. Only relevant when `enable_eck = true`. Confirm the ECK ↔ Elasticsearch support matrix before bumping (ECK 3.x supports the 8.x and 9.x stacks). |
-| `allow_lambda_microvms` | Keep the two Lambda MicroVM statements (`LambdaMicrovmsLifecycle`, `LambdaMicrovmsPassConnector`) in this account's workload permission boundary. **Default `true`**, the boundary every account has today. Set `false` on cells that don't use Lambda MicroVMs: the boundary then caps every MicroVM action and `lambda:PassNetworkConnector` to nothing. Flipping it updates the boundary policy in place. |
-| `pd_balanced_use_cell_key` | Encrypt new volumes on the `pd-balanced` StorageClass (connector PVCs, and the telemetry export queue with `grafana_mode = "cloud"`) with `cell_kms_key_arn`, set the same way as `gp3-cmk` (`encrypted = "true"`, `kmsKeyId`). **Default `false`** (today's behaviour: no encryption parameters, so volumes rely on the account's EBS default encryption). `cell_kms_key_arn` is required when `true`, and the key needs the EBS CSI prerequisites in RUNBOOKS, *Customer-managed-key (CMK) EBS volumes*. **StorageClass parameters are immutable:** enabling this on an existing cell replaces the `pd-balanced` class, and existing volumes are unaffected (they keep their current encryption). |
 
 Populate the infra identifiers (`vpc_id`, `private_subnet_ids`, `eks_cluster_name`,
 `eks_oidc_provider`, `runner_role_arn`) from the Omnistrate console (instance
@@ -396,8 +394,8 @@ Each in-VPC substrate a strict/residency customer opts into is gated by an opt-i
 | `enable_eck` | ECK operator (self-hosted ES) | `es_mode` | `/pavo/cells/<cluster>/eck_ready` SSM + **fail-fast** — a `self_hosted` ES CR *hard-fails* without ECK |
 | `enable_observability` | in-VPC Grafana/Prometheus + OTel collector | `grafana_mode` | Phase-4 one-time convergence barrier (see below) |
 
-- **Default `false`, opt-in per cell** — a cell that keeps every instance on Grafana Cloud must not run an idle operator / unused monitoring stack.
-- **Set `true` in `cells/<cluster>/<cluster>.tfvars`** by whoever provisions the cell: the **customer** (mirrored module, their admin, they audit it) or **Pavo** at onboarding. Recorded in tfvars so it can't silently regress; never automatic, never a runtime toggle. Self-hosted customer → both `true`, paired with the matching instance flag. The BYOC instance plan defaults `grafana_mode` to `self_hosted`, so a new instance on this cell uses the in-VPC stack unless someone sets `grafana_mode=cloud`. Leave `enable_observability` false only when every instance on the cell is explicitly `grafana_mode=cloud`.
+- **Default `false`, opt-in per cell** — a cloud cell must not run an idle operator / unused monitoring stack.
+- **Set `true` in `cells/<cluster>/<cluster>.tfvars`** by whoever provisions the cell: the **customer** (mirrored module, their admin, they audit it) or **Pavo** at onboarding. Recorded in tfvars so it can't silently regress; never automatic, never a runtime toggle. Self-hosted customer → both `true`, paired with the matching instance flag.
 - **Cell-level, not per-instance:** the substrate is cluster-scoped (one operator / one Grafana per cell), so a per-instance flag can't create it. `es_mode`/`grafana_mode` only **route**.
 - **Both substrates are gated, for different reasons and at different points.** ES uses `eck_ready` as a *pre*-condition: a `self_hosted` ES CR hard-fails without the operator, so Phase 4 must refuse to start. Observability is gated *after* the fact, by a one-time Phase-4 convergence barrier.
 
@@ -425,7 +423,7 @@ module owns the resource, who applies it, and where state lives.
 |---|---|---|---|---|
 | **Account** | `pavo-bootstrap-aws/` (AWS only) | Customer (AWS creds) | Customer-local | IAM permission boundaries, `/pavo/shared/*` SSM |
 | **Cell** (one EKS cluster) | `pavo-bootstrap-aws/` (AWS only) | Customer (AWS creds) | Customer-local | IngressClass, ClusterIssuer, ESO/Reloader helm releases, EKS access entry, `/pavo/cells/<cluster>/*` SSM |
-| **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | Pavo-owned GCS bucket, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
+| **Customer** (one `customer_name`) | `pavo-customer-bootstrap/` | Pavo ops (Zitadel PAT) | GCS `gs://pavo-terraform-state`, prefix `customer-bootstrap/<customer>` | Zitadel org, project, OIDC app, IdPs, login policy |
 | **Instance** (one Pavo deployment) | `terraform-omnistrate-aws/` (AWS)<br>`terraform-omnistrate-gcp/` (GCP) | Omnistrate runner | Omnistrate-managed | AWS: RDS, ElastiCache, S3, SNS/SQS, EFS, workload IAM role.<br>GCP: Cloud SQL, Memorystore, GCS, Pub/Sub, workload service account.<br>Both: per-instance namespace, app secrets, Elastic Cloud deployment |
 
 Account and Cell scope are AWS-only today: GCP has no cell-bootstrap module, so a

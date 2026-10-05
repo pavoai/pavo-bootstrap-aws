@@ -57,6 +57,11 @@
       "images": [
         { "yq_path": "", "ghcr_name": "pavo-alert-sanitizer" }
       ]
+    },
+    "microvm-publisher": {
+      "images": [
+        { "yq_path": "", "ghcr_name": "microvm-publisher" }
+      ]
     }
   }
 }

@@ -1,5 +1,5 @@
 # Grafana dashboard, as-code. The Grafana sidecar loads ConfigMaps labelled
-# grafana_dashboard in this namespace. Authored against real series from an internal test instance.
+# grafana_dashboard in this namespace. Authored against real awstest series.
 # The JSON below is the single source of truth — edit here.
 apiVersion: v1
 kind: ConfigMap

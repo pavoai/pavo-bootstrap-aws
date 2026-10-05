@@ -27,7 +27,7 @@ variable "eks_oidc_provider" {
 }
 
 variable "runner_role_arn" {
-  description = "IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the underlying role ARN (arn:aws:iam::<acct>:role/<RoleName>), NOT an assumed-role session ARN. See README → 'How to get runner_role_arn' for how to obtain it."
+  description = "IAM role ARN of the Omnistrate Terraform runner principal that needs cluster-admin RBAC on this EKS cluster. MUST be the underlying role ARN (arn:aws:iam::<acct>:role/<RoleName>), NOT an assumed-role session ARN. See README → 'Onboarding a new AWS BYOC cell' for how to obtain it."
   type        = string
 
   validation {
@@ -185,17 +185,15 @@ variable "eck_operator_chart_version" {
 # In-VPC observability (self-hosted Grafana/Prometheus) — opt-in per cell.
 # Mirrors enable_eck. When true, bootstrap installs the metrics stack + the OTel
 # collector into the pavo-observability namespace. See README "Cell self-hosting
-# flags". The BYOC instance plan defaults grafana_mode to self_hosted, so cells
-# that accept that default need this flag true (Phase 4 convergence barrier).
+# flags". No readiness SSM: a grafana_mode=self_hosted misroute just drops
+# telemetry (soft), unlike ECK's hard failure.
 # -----------------------------------------------------------------------------
 variable "enable_observability" {
   description = <<-EOT
     Install the in-VPC observability stack (Prometheus + Grafana + Postgres +
     OTel collector) on this cell, for customers whose telemetry must not leave
-    the VPC (grafana_mode = self_hosted, the BYOC instance default). Opt-in per
-    cell, DEFAULTS OFF — a cell that keeps every instance on Grafana Cloud must
-    not run an unused monitoring stack. Cells that accept the instance default
-    must set this true.
+    the VPC (grafana_mode = self_hosted). Opt-in per cell, DEFAULTS OFF — a
+    cloud-observability cell must not run an unused monitoring stack.
   EOT
   type        = bool
   default     = false
@@ -354,56 +352,16 @@ variable "observability_otel_collector_chart_version" {
   default     = "0.108.0"
 }
 
-variable "allow_lambda_microvms" {
-  description = <<-EOT
-    Keep the Lambda MicroVM statements (LambdaMicrovmsLifecycle and
-    LambdaMicrovmsPassConnector, marked "switch": "allow_lambda_microvms" in
-    policy-statements.json) in this account's workload permission boundary.
-
-    Default true, which is the boundary every account has today. Set false on
-    cells that don't use Lambda MicroVMs: the boundary then caps every MicroVM
-    action and lambda:PassNetworkConnector to nothing, whatever a workload
-    role's own policy says. The boundary is one account-scoped policy
-    (pavo-permission-boundary-shared), so flipping this updates that policy in
-    place; nothing is replaced.
-  EOT
-  type        = bool
-  default     = true
-}
-
 variable "cell_kms_key_arn" {
   description = <<-EOT
-    The cell's single customer-managed KMS key ARN — encrypts at rest under the
-    customer's own key: RDS, application S3, EFS filesystems created on
-    strict-posture instances, self-hosted ES + snapshots, the in-VPC
-    observability volumes and, with pd_balanced_use_cell_key = true, new
-    pd-balanced volumes. One key for the whole
-    deployment: least customer effort, uniform key custody. Required when
-    enable_observability = true (used for the gp3-cmk StorageClass the
-    observability PVCs bind to) or pd_balanced_use_cell_key = true.
+    The cell's single customer-managed KMS key ARN — encrypts everything at rest
+    under the customer's own key (RDS, self-hosted ES + snapshots, and the in-VPC
+    observability volumes). One key for the whole deployment: least customer
+    effort, uniform key custody. Required when enable_observability = true (used
+    for the gp3-cmk StorageClass the observability PVCs bind to).
   EOT
   type        = string
   default     = ""
-}
-
-variable "pd_balanced_use_cell_key" {
-  description = <<-EOT
-    Encrypt new volumes on the pd-balanced StorageClass (connector PVCs, and the
-    telemetry export queue with grafana_mode = "cloud") with cell_kms_key_arn,
-    set exactly as the gp3-cmk StorageClass sets it (encrypted = "true",
-    kmsKeyId = the cell key). cell_kms_key_arn is then required.
-
-    Default false, which is today's behaviour: the class sets no encryption, so
-    a volume is encrypted only if the account's EBS default encryption is on.
-
-    StorageClass parameters are immutable. Enabling this on an existing cell
-    replaces the pd-balanced class (deleted and recreated under the same
-    name); volumes that already exist are unaffected and keep their current
-    encryption. The cell key needs the EBS CSI driver prerequisites in
-    RUNBOOKS.md, "Customer-managed-key (CMK) EBS volumes".
-  EOT
-  type        = bool
-  default     = false
 }
 
 variable "cert_manager_namespace" {
@@ -416,8 +374,8 @@ variable "cert_manager_namespace" {
     Omnistrate-managed deployment-cell amenity and they install it into
     `cert-manager-ns`; its controller runs with
     `--cluster-resource-namespace=$(POD_NAMESPACE)`, so the cluster-resource
-    namespace follows the release namespace. Verified on two internal test
-    cells, 2026-09-15.
+    namespace follows the release namespace. Verified on hc-fmnwao4ct and
+    hc-d75sozh69, 2026-09-15.
 
     Override only if a cell runs cert-manager somewhere else.
 
@@ -433,7 +391,7 @@ variable "cert_manager_namespace" {
 
     Not a concern for the default change from `cert-manager` to `cert-manager-ns`:
     no cell has ever had `install_private_ca = true`, so no CA key material exists
-    to preserve (verified on two internal test cells, 2026-09-15).
+    to preserve (verified on hc-fmnwao4ct and hc-d75sozh69, 2026-09-15).
   EOT
   type        = string
   default     = "cert-manager-ns"
@@ -485,4 +443,10 @@ variable "kubeconfig_path" {
     condition     = var.kubeconfig_path == "" || try(fileexists(var.kubeconfig_path), false)
     error_message = "kubeconfig_path must point at an existing file (or be empty to derive the endpoint from the cluster)."
   }
+}
+
+variable "enable_microvm_image_builds" {
+  description = "Initially create the account-owned MicroVM publisher/build boundaries. Once either readiness marker exists, false or omitted input retains them; decommission requires a separate drain and state-owned cleanup."
+  type        = bool
+  default     = false
 }
