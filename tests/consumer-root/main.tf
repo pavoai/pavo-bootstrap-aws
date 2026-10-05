@@ -2,7 +2,7 @@
 #
 # Purpose: prove that pavo-bootstrap-aws composes as a child module with a
 # caller-injected, ALIASED aws provider — the path our own direct-root apply and
-# internal test cell never exercise. Specifying a `providers` map cancels default-provider
+# awstest never exercise. Specifying a `providers` map cancels default-provider
 # inheritance, so `terraform init && terraform validate` here is the authority on
 # the COMPLETE required providers map a consumer must pass. If validate demands
 # time/random (the module uses time_sleep + random_password without provider

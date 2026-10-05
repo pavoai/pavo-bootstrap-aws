@@ -22,7 +22,7 @@
 #
 # Usage:
 #   AWS_PROFILE=<account-profile> ./scripts/populate-provider-mirror.sh <eks-cluster-name> [region]
-#     e.g. AWS_PROFILE=my-cell-account ./scripts/populate-provider-mirror.sh <eks-cluster-name>
+#     e.g. AWS_PROFILE=pavo-omnistrate-aws ./scripts/populate-provider-mirror.sh hc-fmnwao4ct
 #     region defaults to us-east-1. <eks-cluster-name> is the same value passed to
 #     the bootstrap apply (Omnistrate's kubernetesClusterID); the bucket name is
 #     derived as pavo-tf-mirror-<eks-cluster-name>.

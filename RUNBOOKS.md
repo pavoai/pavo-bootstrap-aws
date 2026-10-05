@@ -44,8 +44,6 @@ the in-VPC observability PVCs) can be encrypted with **your own KMS key** via a
 `aws/ebs`-key volumes work with no extra setup; **customer-CMK volumes need three
 things** because the EBS CSI driver's role must be allowed to use your key:
 
-> **`pd-balanced` on the cell key (`pd_balanced_use_cell_key`).** The `pd-balanced` class (connector PVCs, and the telemetry export queue with `grafana_mode = "cloud"`) sets no encryption by default, so its volumes rely on the account's EBS default encryption. Set `pd_balanced_use_cell_key = true` to give it the same `encrypted = "true"` / `kmsKeyId = cell_kms_key_arn` parameters as `gp3-cmk`; `cell_kms_key_arn` is then required (plan-time precondition), and the three steps below apply. **StorageClass parameters are immutable:** enabling the flag on an existing cell replaces the class (deleted and recreated as `pd-balanced`), and existing volumes are unaffected: they keep the encryption they were created with. Only volumes provisioned afterwards use the cell key.
-
 1. **Tag the key** — add this tag to the CMK you want used for EBS:
    ```text
    omnistrate.com/customer-managed-kms = true
@@ -78,7 +76,7 @@ things** because the EBS CSI driver's role must be allowed to use your key:
 > per-key gate.**
 
 Then reference the CMK-backed `gp3-cmk` StorageClass in your PVCs. (On a cell
-whose key already delegates to account root — e.g. Pavo's internal test cell — the IAM side
+whose key already delegates to account root — e.g. our `awstest` — the IAM side
 alone provisions CMK volumes; the tag + key policy matter for locked-down
 customer keys.)
 
@@ -104,7 +102,7 @@ customer keys.)
 
 - `kubernetes_storage_class_v1.ebs_gp3` — `pd-balanced` cluster-scoped
   StorageClass (gp3, name matches GCP convention used by connector PVCs). Uses
-  Omnistrate's pre-installed `ebs.csi.aws.com` provisioner. With `pd_balanced_use_cell_key = true` it also sets `encrypted = "true"` and `kmsKeyId = cell_kms_key_arn`; see *Customer-managed-key (CMK) EBS volumes*.
+  Omnistrate's pre-installed `ebs.csi.aws.com` provisioner.
 - `kubectl_manifest.pavo_ingress_class` — cluster-scoped `pavo-nginx`
   IngressClass.
 - `kubectl_manifest.pavo_letsencrypt_prod` — cluster-scoped Let's Encrypt
@@ -179,6 +177,7 @@ bumps** (i.e. whenever `provider-mirror/versions.tf` changes in a new module ver
 > `scripts/render-mirror-providers.py` from `terraform-omnistrate-aws/providers.tf`
 > in the source monorepo; CI (`check-policy-drift`) fails if it drifts. Do not hand-edit it.
 
+
 ---
 
 ## S3 / DynamoDB gateway endpoints (adaptive coverage)
@@ -242,6 +241,7 @@ aws ec2 describe-vpc-endpoints --filters \
   --query 'VpcEndpoints[].{id:VpcEndpointId,rts:RouteTableIds}'
 ```
 
+
 ---
 
 ## Permission boundary scoping & verification
@@ -296,21 +296,6 @@ withheld from the provisioning role — listed in `BOUNDARY_ONLY_SIDS` in
 The provisioning role also holds **no** Bedrock agreement / use-case actions, so
 accepting the Claude model-use agreement is a one-time customer onboarding step,
 not a Pavo permission (see `terraform-omnistrate-aws` → `bedrock_model_agreements`).
-
-### Switched statements: `allow_lambda_microvms`
-
-A `scope: "boundary"` statement can also carry `"switch": "<variable>"`. The module then puts it in the boundary only while that variable is true (`local.boundary_switches` in `main.tf`; a precondition rejects unknown switch names and switches on non-boundary statements). Today there is one switch:
-
-- `allow_lambda_microvms` (default `true`) controls `LambdaMicrovmsLifecycle` and `LambdaMicrovmsPassConnector`. Set false on cells that don't use Lambda MicroVMs. The boundary is the one account-scoped policy `pavo-permission-boundary-shared`, so flipping the variable updates that policy in place.
-
-`rendered-permission-boundary.json` is the default render, with every switch on. To see the boundary a cell gets with a switch off, render it with `--disable`:
-
-```bash
-scripts/render-policy.sh pavo-bootstrap-aws/policy-statements.json \
-  --disable allow_lambda_microvms | jq .
-```
-
-Adding a new switch means adding it to `local.boundary_switches` in `main.tf`, a variable in `variables.tf`, and `KNOWN_SWITCHES` in `scripts/render-policy.sh`.
 
 ### Least-privilege is non-negotiable (and customer-audited)
 
@@ -465,7 +450,7 @@ table: Omnistrate change it without notice, and three parameters that existed on
 the account config, and at least one of them contradicts the template default, so
 check every value on the stack-creation screen instead of clicking through.
 
-| Parameter | Template default | Standard cell | Private cell (strict / air-gapped shape) |
+| Parameter | Template default | Standard cell | Private cell (BCNC shape) |
 |---|---|---|---|
 | `IsBYOCPrivateAccount` | `false` | `false` | **`true`** — selects the private EKS cluster and Lambda-based agent install |
 | `EnablePrivateArtifactRegistry` | `false` | `false` | **`true`** — without it the cell cannot read charts or images from the private registry, so nothing pulls |
@@ -476,8 +461,8 @@ check every value on the stack-creation screen instead of clicking through.
 Two observed traps:
 
 - **`EnableECRHelmChartPull` is defaulted `true` by the template but set `false`
-  by the generated link** on at least one of Pavo's test accounts (both the
-  `cloudformation_url` and `cloudformation_url_no_lb` variants). A customer
+  by the generated link** on at least one of our accounts (`388371826980`, both
+  the `cloudformation_url` and `cloudformation_url_no_lb` variants). A customer
   who follows the link as sent gets the wrong value. Read the screen.
 
 The two are not the same gate and are worth keeping apart when debugging.
@@ -550,6 +535,40 @@ aws cloudformation continue-update-rollback --stack-name <STACK> --region <REGIO
 Then re-run the update **with `CreateLoadBalancerPolicy` set to the value Phase 1
 used** (normally `false` for any account that hit this), or with
 `UsePreviousValue: true`.
+
+### Migrating existing customers when boundary changes
+
+Customers who applied this module **before** the EFS tag-scoping change need a
+one-time tag backfill on the existing EFS file system, **before** re-applying
+the bootstrap with the new boundary. Without the backfill, the new boundary
+would block all mutations on the pre-existing un-tagged file system.
+
+For `awstest`:
+
+```bash
+# 1. Find the awstest EFS file system ID.
+aws efs describe-file-systems --region us-east-1 \
+  --query "FileSystems[?starts_with(Name, 'pavo-efs-')].FileSystemId" --output text
+
+# 2. Backfill all 4 Pavo standard tags (use the actual instance ID for omnistrate_instance).
+aws efs tag-resource \
+  --resource-id <fs-id-from-step-1> \
+  --tags \
+    Key=managed_by,Value=pavo \
+    Key=customer,Value=awstest \
+    Key=environment,Value=prod \
+    Key=omnistrate_instance,Value=<awstest-omnistrate-instance-id>
+
+# 3. Verify all 4 tags present.
+aws efs describe-tags --file-system-id <fs-id-from-step-1>
+
+# 4. Re-apply the bootstrap module (refreshes the permission boundary in IAM).
+terraform -chdir=pavo-bootstrap-aws apply
+```
+
+New customers: no migration needed. They get the tightened
+boundary on first apply — `terraform-omnistrate-aws` provider default_tags
+applies `managed_by=pavo` to every EFS file system on creation.
 
 ---
 
@@ -656,14 +675,14 @@ pools**, only the tainted system pool. Fine for the bootstrap operators (they
 tolerate the taint, above), but it would **deadlock a self-hosted-ES first
 deploy**: `pavoInfra`'s own ES/init-db pods need a workload node, yet the pools
 that would supply one are created by app resources that only deploy *after*
-`pavoInfra` succeeds. A cell that has deployed before already has
+`pavoInfra` succeeds. A cell that has deployed before (e.g. `awstest`) already has
 pools from prior deploys and never hits this.
 
 **Resolved by the `pavo-compute-anchor` resource.** It declares `compute` with
 **no `dependsOn`**, so Omnistrate deploys it first and its pool supplies the
 initial untainted workload node before `pavoInfra` runs; `pavoInfra` and the app
-helms all depend on it. The anchor is part of Pavo's Omnistrate service
-definition, not of this module.
+helms all depend on it. See
+[`charts/pavo-compute-anchor/README.md`](../charts/pavo-compute-anchor/README.md).
 
 > **Interim (per-helm compute).** The app helms (ingress-nginx, api-gateway,
 > intern, frontend, onboarding-copy, tribal-knowledge, capability-proxy) currently
@@ -737,13 +756,11 @@ pair above, using `var.runner_role_arn` instead of your own): `delete-access-ent
 
 ## Setting up the CMK (separate from bootstrap; before workload deploys)
 
-One CMK per cell encrypts RDS storage, the RDS-managed master secret, application S3 (`onboarding` + `intern_data`), EFS filesystems created on strict-posture instances, and (on self-hosted cells) the ES / in-VPC-observability EBS volumes. SNS topics stay on the AWS-managed `aws/sns` key, not this CMK. Its ARN is the instance `cell_kms_key_arn` apiParameter.
+One CMK per cell encrypts **everything** — RDS storage, the RDS-managed master
+secret, and (on self-hosted cells) the ES / in-VPC-observability EBS volumes.
+Its ARN is the instance `cell_kms_key_arn` apiParameter. There are two cases:
 
-**EFS `kms_key_id` is ForceNew.** The cell key applies to filesystems created on strict instances (`network_posture = "strict"`, fixed at instance creation); standard instances get the AWS-managed EFS key. Stage 2 ignores later changes to `kms_key_id` (`lifecycle { ignore_changes = [kms_key_id] }`), so an existing filesystem is never replaced because of its key. Moving an existing filesystem onto the cell key takes a new filesystem and a data migration; Terraform won't do it for you.
-
-There are two cases:
-
-### Quick setup: same-account key (dev/test cells) — `scripts/create-cmk.sh`
+### Quick setup: same-account key (dev/test, e.g. `awstest`) — `scripts/create-cmk.sh`
 
 When the workload + ESO roles live in the **same account** as the key, a plain
 key with the **default policy (root → `kms:*`)** is sufficient: those roles get
@@ -845,9 +862,7 @@ explicit workload/ESO grants on top:
          "StringEquals": {
            "kms:ViaService": [
              "rds.<REGION>.amazonaws.com",
-             "secretsmanager.<REGION>.amazonaws.com",
-             "s3.<REGION>.amazonaws.com",
-             "elasticfilesystem.<REGION>.amazonaws.com"
+             "secretsmanager.<REGION>.amazonaws.com"
            ]
          }
        }
@@ -950,18 +965,10 @@ explicit workload/ESO grants on top:
 4. Paste the CMK ARN into the Omnistrate UI under `cell_kms_key_arn`. The
    instance won't provision until set (`required: true`).
 
-5. **Note on the same CMK serving several duties**: this single CMK encrypts
-   RDS storage, the master-password Secrets Manager secret, application S3,
-   EFS, and (when those modes are on) ES snapshots / Zitadel state / EBS.
-   Statements 2-4 grant the runner what RDS and EFS need to provision, and
-   what S3 object encryption needs at apply time. The instance IRSA
-   (`pavo-role-<instance>`) also needs `kms:Decrypt`/`GenerateDataKey` via
-   `s3.<REGION>.amazonaws.com` — that grant lives on the role's identity
-   policy (`pavo_permissions`); with the default key policy (root → `kms:*`)
-   that is enough. A customer-governed key policy must name that IRSA the
-   same way, or `PutObject`/`GetObject` fail after the buckets switch to
-   `aws:kms`. Statement 5 grants the ESO role what it needs to decrypt the
-   RDS secret at runtime. SNS is not on this key.
+5. **Note on the same CMK serving dual duty**: this single CMK encrypts both
+   RDS storage *and* the master-password Secrets Manager secret. Statements
+   2-4 grant the workload role what RDS needs to provision both. Statement 5
+   grants the ESO role what it needs to decrypt the secret at runtime.
 
 6. The `cell_kms_key_arn` value can be either a **key ARN** (`arn:aws:kms:<region>:<account>:key/<uuid>`)
    or an **alias ARN** (`arn:aws:kms:<region>:<account>:alias/<name>`). Both
@@ -1020,10 +1027,9 @@ possible one.
 
 ## In-VPC observability (self-hosted Grafana / Prometheus / OTel)
 
-For customers whose telemetry must not leave the VPC (`grafana_mode = self_hosted`,
-the BYOC instance default). Opt-in per cell — a cell that keeps every instance
-on Grafana Cloud (`grafana_mode = cloud`) must not run an unused monitoring
-stack. Everything installs from this module's single `terraform apply`
+For customers whose telemetry must not leave the VPC (`grafana_mode = self_hosted`).
+Opt-in per cell — a cloud-observability cell must not run an unused
+monitoring stack. Everything installs from this module's single `terraform apply`
 into the `pavo-observability` namespace: Prometheus (in-VPC TSDB), Grafana
 (internal `pavo-nginx` ingress, dashboards-as-code), Postgres (Grafana backend),
 and the `pavo-otel-collector`. All PVCs bind the customer's one CMK. **Zero
@@ -1037,19 +1043,15 @@ both unset — the default — nothing leaves the cluster.
 
 | Variable | Who sets it | Effect |
 |---|---|---|
-| `enable_observability` | **Pavo operator**, per cell, at bootstrap | Installs the whole stack. Default `false`. Set `true` on any cell that will host a `grafana_mode=self_hosted` instance (the BYOC instance default). |
+| `enable_observability` | **Pavo operator**, per cell, at bootstrap | Installs the whole stack. Default `false`. Set `true` on any cell that will host a `grafana_mode=self_hosted` instance. |
 | `observability_grafana_host` | Pavo operator | Public hostname Grafana serves at; ingress host becomes `grafana.<this>`. Required when `enable_observability = true`. |
-| `cell_kms_key_arn` | **Customer** (the one CMK) | Encrypts the observability PVCs (`gp3-cmk`). Same key the instance module uses for RDS, application S3, EFS (filesystems created on strict instances), ES, and Zitadel — one key for all of them. SNS stays on `aws/sns`. |
+| `cell_kms_key_arn` | **Customer** (the one CMK) | Encrypts the observability PVCs (`gp3-cmk`). Same key the instance module uses for RDS/ES/Zitadel — one key for everything. |
 | `pavo_app_alerts_enabled` | Pavo operator | Also routes Prometheus alerts to Pavo via the in-VPC sanitizer (8-key metadata only). Default `false` = customer-webhook leg only. Requires a real signed `sanitizer_image` — the sanitizer stays off until that image is built (the cell ClusterImagePolicy admits only signed digests). |
 | `customer_alert_webhook_url` | Customer (optional) | Alertmanager posts raw alerts here (via a Secret, never a break-glass-readable ConfigMap). Empty = no customer leg. |
 
-The matching per-instance flag is `grafana_mode` (`self_hosted` default | `cloud`),
-set on the Omnistrate instance. New BYOC instances take `self_hosted` unless
-someone sets `cloud` explicitly, so a cell that will host those instances must
-set `enable_observability = true` or Phase 4's convergence barrier refuses
-READY. Multi-tenant stays on `cloud` unless an operator sets `self_hosted`.
-Telemetry only reaches the in-VPC stack when this cell was bootstrapped with
-`enable_observability = true`.
+The matching per-instance flag is `grafana_mode` (`cloud` default | `self_hosted`),
+set on the Omnistrate instance. It only routes telemetry in-VPC when this cell was
+bootstrapped with `enable_observability = true`.
 
 ### How metrics flow
 
@@ -1215,3 +1217,39 @@ For an urgent fix without a release, apply the ConfigMap directly:
 `kubectl apply -f observability/manifests/<dashboard>.yaml -n pavo-observability`
 (and back-port the edit into the module so the next apply doesn't revert it).
 
+## Adding a cell-level readiness gate (two changes, never one)
+
+`pavo-bootstrap-aws` publishes `/pavo/cells/<cluster>/<marker>` and is applied
+**per cell, by the customer, on their schedule**. `terraform-omnistrate-aws`
+consumes those markers and ships with **every Omnistrate release**. Two
+pipelines, wildly different speeds, so a single commit that adds both a marker
+and the gate requiring it is not atomic in production. The gate reaches
+instances immediately; the marker reaches a cell only when someone re-bootstraps
+it, and every cell in between fails.
+
+This is not hypothetical. #369 added `observability_ready` and its `pavoInfra`
+precondition in one commit on 2026-08-31. awstest went `FAILED` the same day
+with `.../observability_ready does not exist`. The gate was correct; the
+ordering was not. The observability stack had in fact been installed on that
+cell for 41 days — only the marker was missing.
+
+**The procedure:**
+
+1. Add the producer to `pavo-bootstrap-aws` and merge it. Nothing consumes it
+   yet, so this is inert.
+2. Re-bootstrap every cell that will later be asked for the marker. awstest
+   reconciles itself via `Release Omnistrate Bootstrap Dev`; customer cells are
+   customer-applied and must be done deliberately.
+3. Only then add the gate to `terraform-omnistrate-aws`.
+
+`scripts/check-cell-marker-ordering.py` enforces step 1 before step 3 in CI: a
+marker referenced by a consumer must already exist as a producer on the base
+branch. "Producer" means specifically `resource "aws_ssm_parameter" { name = … }`
+— it parses the HCL rather than grepping it, so a `data "aws_ssm_parameter"`
+(which reads the marker), a `locals` block, an `output`, a comment or a heredoc
+naming the same path does not count as publishing it.
+
+**What CI cannot enforce:** step 2. BYOC cells live in customer AWS accounts
+this repo has no credentials for, so whether a cell has actually applied the
+producer is not observable from here. That step stays a human one, and it is the
+step that actually protects customers.

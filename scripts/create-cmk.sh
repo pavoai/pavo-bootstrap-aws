@@ -9,7 +9,7 @@
 #
 # This creates a plain symmetric key with the DEFAULT key policy (root -> kms:*).
 # That is sufficient whenever the workload + ESO roles live in the SAME account
-# (for example Pavo's dev/test cells): their IAM policies grant key use, so NO
+# (all dev/test cells, e.g. awstest): their IAM policies grant key use, so NO
 # key-policy statements are needed. For a LOCKED-DOWN customer key that does not
 # delegate to account root, do NOT use this script — follow the 8-statement key
 # policy in RUNBOOKS.md "Setting up the CMK".

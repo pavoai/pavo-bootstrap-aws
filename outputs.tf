@@ -17,3 +17,13 @@ output "ssm_cell_prefix" {
   description = "SSM Parameter Store prefix for cell-scoped bootstrap state (VPC/subnets/OIDC, ESO role ARN)."
   value       = "/pavo/cells/${var.eks_cluster_name}"
 }
+
+output "microvm_publisher_boundary_arn" {
+  description = "Publisher permission boundary ARN, or null before managed builds have ever been enabled."
+  value       = try(aws_iam_policy.microvm_publisher_boundary[0].arn, null)
+}
+
+output "microvm_build_boundary_arn" {
+  description = "Lambda build-role permission boundary ARN, or null before managed builds have ever been enabled."
+  value       = try(aws_iam_policy.microvm_build_boundary[0].arn, null)
+}
