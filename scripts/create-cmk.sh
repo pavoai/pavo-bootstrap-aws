@@ -9,7 +9,7 @@
 #
 # This creates a plain symmetric key with the DEFAULT key policy (root -> kms:*).
 # That is sufficient whenever the workload + ESO roles live in the SAME account
-# (all dev/test cells, e.g. awstest): their IAM policies grant key use, so NO
+# (same-account cells): their IAM policies grant key use, so NO
 # key-policy statements are needed. For a LOCKED-DOWN customer key that does not
 # delegate to account root, do NOT use this script — follow the 8-statement key
 # policy in RUNBOOKS.md "Setting up the CMK".
@@ -77,6 +77,23 @@ fi
 aws kms tag-resource --region "${REGION}" --key-id "${KEY_ID}" \
   --tags TagKey=omnistrate.com/customer-managed-kms,TagValue=true
 
+# SNS delivers into CMK-encrypted SQS queues as sns.amazonaws.com, which only the
+# key policy can authorize (IAM and grants can't name a service principal).
+# Merge the statement by Sid so customer edits to the policy are kept.
+command -v jq >/dev/null 2>&1 || { echo "[FAIL] jq not found" >&2; exit 1; }
+POLICY="$(aws kms get-key-policy --region "${REGION}" --key-id "${KEY_ID}" \
+  --policy-name default --query Policy --output text)"
+if ! jq -e '.Statement[] | select(.Sid == "AllowSNSToSQSUnderCellKey")' <<<"${POLICY}" >/dev/null; then
+  POLICY="$(jq -c --arg acct "${ACCOUNT_ID}" '.Statement += [{
+    Sid: "AllowSNSToSQSUnderCellKey", Effect: "Allow",
+    Principal: {Service: "sns.amazonaws.com"},
+    Action: ["kms:GenerateDataKey", "kms:Decrypt"], Resource: "*",
+    Condition: {StringEquals: {"aws:SourceAccount": $acct}}}]' <<<"${POLICY}")"
+  aws kms put-key-policy --region "${REGION}" --key-id "${KEY_ID}" \
+    --policy-name default --policy "${POLICY}"
+  echo "[ok]   key policy: added AllowSNSToSQSUnderCellKey"
+fi
+
 # Resolve the canonical, partition-correct key ARN and confirm the key is usable
 # BEFORE reporting success (guards against an alias pointing at a disabled or
 # wrong-type key on adoption).
@@ -98,7 +115,7 @@ Done. Set the instance apiParameter cell_kms_key_arn to either form:
   key ARN   : ${KEY_ARN}
   alias ARN : ${ALIAS_ARN}
 
-Default key policy (root -> kms:*) is used; same-account workload + ESO roles
-grant key use via their IAM policies, so no key-policy edits are needed.
+Default key policy (root -> kms:*) plus AllowSNSToSQSUnderCellKey; same-account
+workload + ESO roles grant key use via their IAM policies.
 For a customer-governed key (access granted by the key policy), see RUNBOOKS.md "Setting up the CMK".
 EOF

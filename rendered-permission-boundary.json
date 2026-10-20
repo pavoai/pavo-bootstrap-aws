@@ -75,10 +75,24 @@
       }
     },
     {
+      "Sid": "SESSendFromNoreply",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "ses:FromAddress": "noreply@*"
+        }
+      }
+    },
+    {
       "Sid": "SESMutatingTaggedPavoIdentities",
       "Effect": "Allow",
       "Action": [
-        "ses:SendEmail",
         "ses:DeleteEmailIdentity",
         "ses:GetEmailIdentity",
         "ses:ListTagsForResource",
@@ -181,6 +195,21 @@
       ]
     },
     {
+      "Sid": "ConnectorAssumeCustomerRoles",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "sts:ExternalId": "pavo-*"
+        }
+      }
+    },
+    {
       "Sid": "DenyCreateRoleWithoutBoundary",
       "Effect": "Deny",
       "Action": [
@@ -250,7 +279,9 @@
             "secretsmanager.*.amazonaws.com",
             "elasticache.*.amazonaws.com",
             "elasticfilesystem.*.amazonaws.com",
-            "s3.*.amazonaws.com"
+            "s3.*.amazonaws.com",
+            "sns.*.amazonaws.com",
+            "sqs.*.amazonaws.com"
           ]
         }
       }

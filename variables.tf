@@ -1,27 +1,30 @@
-variable "vpc_id" {
-  description = "VPC ID where the EKS cluster runs (Omnistrate-provisioned)."
+# Optional cell inputs: null = read from the provider's account (see cell.tf).
+variable "eks_cluster_name" {
+  description = "EKS cluster name; null = the one hc-* cluster in the provider's account/region."
   type        = string
+  default     = null
+}
+
+variable "vpc_id" {
+  description = "VPC ID of the EKS cluster; null = read from the cluster."
+  type        = string
+  default     = null
 }
 
 variable "private_subnet_ids" {
-  description = "Private subnet IDs (Omnistrate-tagged kubernetes.io/role/internal-elb=1)."
+  description = "Private subnet IDs; null = the cluster VPC's subnets tagged kubernetes.io/role/internal-elb=1."
   type        = list(string)
-}
-
-variable "eks_cluster_name" {
-  description = "EKS cluster name (Omnistrate-provisioned)."
-  type        = string
+  default     = null
 }
 
 variable "eks_oidc_provider" {
-  description = "EKS OIDC issuer URL without https:// prefix (e.g., oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE)."
+  description = "EKS OIDC issuer without https:// (e.g. oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE); null = read from the cluster."
   type        = string
+  default     = null
 
   validation {
-    # The IRSA/OIDC wiring downstream concatenates this with `arn:aws:iam::<acct>:oidc-provider/`,
-    # so a `https://` prefix on input produces a malformed ARN and fails only at apply time.
-    # Catch it at the module boundary.
-    condition     = length(var.eks_oidc_provider) > 0 && !startswith(var.eks_oidc_provider, "https://") && !startswith(var.eks_oidc_provider, "http://")
+    # Concatenated into arn:aws:iam::<acct>:oidc-provider/<this>; a scheme prefix only fails at apply.
+    condition     = !can(regex("^https?://", var.eks_oidc_provider))
     error_message = "eks_oidc_provider must be the issuer host/path without the https:// or http:// prefix."
   }
 }
@@ -100,6 +103,28 @@ variable "policy_controller_chart_version" {
   default     = "0.10.6"
 }
 
+variable "external_secrets_chart_version" {
+  description = <<-EOT
+    Helm chart version for external-secrets/external-secrets. Default 0.10.4,
+    which installs the v1beta1 CRDs the instance module's SecretStores use.
+    The container image tag is pinned separately in mirrored-images.json;
+    bumping this chart without that pin (and a CRD compatibility check) will
+    not move the running image and can break SecretStore admission.
+  EOT
+  type        = string
+  default     = "0.10.4"
+}
+
+variable "reloader_chart_version" {
+  description = <<-EOT
+    Helm chart version for stakater/reloader. Default 1.1.0. The container
+    image tag is pinned separately in mirrored-images.json; keep the two
+    together when bumping.
+  EOT
+  type        = string
+  default     = "1.1.0"
+}
+
 variable "central_ci_project_id" {
   description = <<-EOT
     GCP project that hosts Pavo's central Cloud Build (the one that builds
@@ -154,6 +179,23 @@ variable "install_private_ca" {
   default     = false
 }
 
+variable "network_posture" {
+  description = <<-EOT
+    Cell network posture. Mirrors the instance apiParameter: 'standard' (default —
+    NAT / public egress allowed) or 'strict' (dedicated zero-egress / endpoint-only
+    cell). Strict cells need the Route53 interface VPCE so host-cluster external-dns
+    can publish Omnistrate ingress names without NAT. Dedicated strict cells only
+    (1 cell = 1 customer). This is the only gate for the Route53 interface VPCE.
+  EOT
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "strict"], var.network_posture)
+    error_message = "network_posture must be \"standard\" or \"strict\"."
+  }
+}
+
 variable "network_policy_ready" {
   description = <<-EOT
     Assert that AWS VPC CNI NetworkPolicy ENFORCEMENT is enabled on this cell
@@ -182,8 +224,8 @@ variable "eck_operator_chart_version" {
 }
 
 # -----------------------------------------------------------------------------
-# In-VPC observability (self-hosted Grafana/Prometheus) — opt-in per cell.
-# Mirrors enable_eck. When true, bootstrap installs the metrics stack + the OTel
+# In-VPC observability (self-hosted Grafana/Prometheus) — on by default.
+# When true, bootstrap installs the metrics stack + the OTel
 # collector into the pavo-observability namespace. See README "Cell self-hosting
 # flags". No readiness SSM: a grafana_mode=self_hosted misroute just drops
 # telemetry (soft), unlike ECK's hard failure.
@@ -191,12 +233,12 @@ variable "eck_operator_chart_version" {
 variable "enable_observability" {
   description = <<-EOT
     Install the in-VPC observability stack (Prometheus + Grafana + Postgres +
-    OTel collector) on this cell, for customers whose telemetry must not leave
-    the VPC (grafana_mode = self_hosted). Opt-in per cell, DEFAULTS OFF — a
-    cloud-observability cell must not run an unused monitoring stack.
+    OTel collector) on this cell (grafana_mode = self_hosted). DEFAULTS ON;
+    requires cell_kms_key_arn and observability_grafana_host. Set false only on a
+    cell whose instances send telemetry to Grafana Cloud (grafana_mode = cloud).
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "observability_grafana_host" {
@@ -374,8 +416,8 @@ variable "cert_manager_namespace" {
     Omnistrate-managed deployment-cell amenity and they install it into
     `cert-manager-ns`; its controller runs with
     `--cluster-resource-namespace=$(POD_NAMESPACE)`, so the cluster-resource
-    namespace follows the release namespace. Verified on hc-fmnwao4ct and
-    hc-d75sozh69, 2026-09-15.
+    namespace follows the release namespace. Verified on live Omnistrate
+    cells, 2026-09-15.
 
     Override only if a cell runs cert-manager somewhere else.
 
@@ -391,7 +433,7 @@ variable "cert_manager_namespace" {
 
     Not a concern for the default change from `cert-manager` to `cert-manager-ns`:
     no cell has ever had `install_private_ca = true`, so no CA key material exists
-    to preserve (verified on hc-fmnwao4ct and hc-d75sozh69, 2026-09-15).
+    to preserve (verified on live Omnistrate cells, 2026-09-15).
   EOT
   type        = string
   default     = "cert-manager-ns"
@@ -447,6 +489,178 @@ variable "kubeconfig_path" {
 
 variable "enable_microvm_image_builds" {
   description = "Initially create the account-owned MicroVM publisher/build boundaries. Once either readiness marker exists, false or omitted input retains them; decommission requires a separate drain and state-owned cleanup."
+  type        = bool
+  default     = false
+}
+
+# -----------------------------------------------------------------------------
+# Connector access from a strict cell. All three default to off/empty, so a cell
+# that sets none of them renders exactly as before. The two value inputs are
+# published as /pavo/cells/<eks_cluster_name>/* parameters (main.tf) instead of
+# being Omnistrate instance parameters: every instance deploy runs an early
+# Terraform phase WITHOUT instance parameters, and a grant gated on one is
+# dropped and later restored on every deploy (0b5f9db: the MicroVM grants were
+# revoked for 79 and 28 minutes that way). A cell value is present in every phase.
+# -----------------------------------------------------------------------------
+
+variable "connector_assumable_role_arns" {
+  description = <<-EOT
+    IAM roles in the customer's own accounts that Pavo's connectors may assume
+    (today: the Amazon SageMaker connector's IAM-role mode). Exact role ARNs only,
+    no wildcards. Default empty: no workload role may assume any role.
+
+    When non-empty, the cell publishes
+    /pavo/cells/<eks_cluster_name>/connector_assumable_role_arns, which the
+    per-instance module reads to let the workload role assume exactly these roles.
+    The permission boundary's matching ceiling (ConnectorAssumeCustomerRoles in
+    policy-statements.json) is always present, admits only a Pavo-issued external
+    ID (the "pavo-" prefix), and allows nothing on its own. The
+    customer's role must still trust the workload role (the principal shown in
+    Pavo's SageMaker setup panel) with the same external ID. That trust policy is
+    the customer's own and this input does not change it.
+
+    Why a prefix and not the exact external ID: the exact ID is derived per Pavo
+    tenant only once the Pavo instance exists, which is after this module is
+    applied, so it cannot be named here or in the boundary. The customer's trust
+    policy pins the exact value.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.connector_assumable_role_arns :
+      can(regex("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$", arn))
+    ])
+    error_message = "connector_assumable_role_arns entries must be exact IAM role ARNs (arn:aws:iam::<12-digit account>:role/<name>), with no wildcards."
+  }
+}
+
+variable "strict_egress_extra_destinations" {
+  description = <<-EOT
+    Extra destinations that pods of a network_posture = "strict" instance may
+    reach, on top of the VPC, same-region S3 and the cluster's own services. For
+    the customer's own network only: an outbound proxy, or an on-premises range
+    reached over the customer's Transit Gateway or Direct Connect (for example a
+    self-hosted Confluence). Each entry is one IPv4 CIDR, the TCP ports allowed to
+    it, and a description that becomes the audit trail. Default empty: the strict
+    egress policy is unchanged.
+
+    Use a /32 for a single host (a proxy, a Confluence server). The floor is /16,
+    so a typo cannot open a whole internal network.
+
+    Published as /pavo/cells/<eks_cluster_name>/strict_egress_extra_destinations;
+    the per-instance strict egress NetworkPolicy adds one rule per entry, opening
+    only that CIDR and only those ports. This opens the Kubernetes policy only.
+    Routing to the destination (Transit Gateway, route tables, firewalls) is the
+    customer's network.
+  EOT
+  type = list(object({
+    cidr        = string
+    ports       = list(number)
+    description = string
+  }))
+  default = []
+
+  validation {
+    # try() on each part: validation conditions are not guaranteed to
+    # short-circuit (CI pins 1.9.8), so each part must be safe on its own. The
+    # regex keeps IPv6 out: the strict policy and the /16 floor are IPv4.
+    condition = alltrue([
+      for d in var.strict_egress_extra_destinations :
+      can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$", d.cidr)) && try(cidrsubnet(d.cidr, 0, 0) == d.cidr, false) && try(tonumber(split("/", d.cidr)[1]) >= 16, false)
+    ])
+    error_message = "strict_egress_extra_destinations: each cidr must be a canonical IPv4 CIDR (network address) with a prefix of /16 or longer; use /32 for a single host such as a proxy (e.g. 10.20.30.40/32)."
+  }
+
+  validation {
+    condition = alltrue([
+      for d in var.strict_egress_extra_destinations :
+      length(d.ports) > 0 && alltrue([for p in d.ports : p >= 1 && p <= 65535 && floor(p) == p])
+    ])
+    error_message = "strict_egress_extra_destinations: each entry needs at least one TCP port, each a whole number from 1 to 65535."
+  }
+
+  validation {
+    condition     = alltrue([for d in var.strict_egress_extra_destinations : trimspace(d.description) != ""])
+    error_message = "strict_egress_extra_destinations: each entry needs a description saying what the destination is."
+  }
+}
+
+variable "enable_sagemaker_api_endpoint" {
+  description = <<-EOT
+    Add the Amazon SageMaker API (com.amazonaws.<region>.sagemaker.api) to this
+    cell's interface endpoints (vpc_interface_endpoints.tf), with private DNS, so
+    the SageMaker connector reaches SageMaker in this region without leaving the
+    AWS network. Default false. Same reuse rule as the other cell endpoints: if a
+    foreign private-DNS SageMaker API endpoint already exists in the VPC, it is
+    reused and none is created.
+
+    Covers the SageMaker API in this cell's region only. SageMaker in another
+    region, and MLflow Apps (AWS publishes no PrivateLink endpoint for them), need
+    a separate route.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "snowflake_privatelink" {
+  description = <<-EOT
+    Snowflake over AWS PrivateLink, for a customer on Snowflake Business Critical
+    (or higher) hosted on AWS in this cell's region. Default null: nothing is
+    created. Both values come from SYSTEM$GET_PRIVATELINK_CONFIG, run in the
+    customer's Snowflake account after a Snowflake ACCOUNTADMIN has authorized this
+    AWS account with SYSTEM$AUTHORIZE_PRIVATELINK:
+      - vpce_service_name: the "privatelink-vpce-id" value
+        (com.amazonaws.vpce.<region>.vpce-svc-<id>).
+      - hostnames: the "privatelink-account-url" and
+        "regionless-privatelink-account-url" values. The two OCSP URLs are not
+        needed: this module opens HTTPS only, which requires Pavo's Snowflake
+        clients to run connector 4.8 or later (no OCSP checking by default).
+
+    Creates an interface endpoint to that service, a security group allowing only
+    HTTPS (443) from the cell VPC, and a Route 53 private hosted zone
+    privatelink.snowflakecomputing.com, associated with this VPC only, with one
+    CNAME per hostname pointing at the endpoint. Set manage_dns = false when the
+    customer's VPCs already resolve privatelink.snowflakecomputing.com (a shared
+    private hosted zone, or forwarding to their own resolvers): then only the
+    endpoint and its security group are created, hostnames may be empty, and the
+    customer's DNS team points the account hostnames at the endpoint's DNS name
+    (output snowflake_vpce_dns_name). The endpoint's IPs are inside the
+    VPC CIDR, which the strict egress policy already allows. In Pavo the
+    connector's account is then entered as the PrivateLink account identifier
+    (<locator>.<region>.privatelink): no code or connector field changes.
+    Snowflake's internal stages are reached through the cell's S3 gateway endpoint,
+    which only works when Snowflake is in this cell's region.
+  EOT
+  type = object({
+    vpce_service_name = string
+    hostnames         = optional(list(string), [])
+    manage_dns        = optional(bool, true)
+  })
+  default = null
+
+  validation {
+    # The attribute access sits inside can(), so a null input never errors here
+    # even though validation conditions do not short-circuit (CI pins 1.9.8).
+    condition     = var.snowflake_privatelink == null || can(regex("^com\\.amazonaws\\.vpce\\.[a-z0-9-]+\\.vpce-svc-[0-9a-f]+$", var.snowflake_privatelink.vpce_service_name))
+    error_message = "snowflake_privatelink.vpce_service_name must be the privatelink-vpce-id from SYSTEM$GET_PRIVATELINK_CONFIG (com.amazonaws.vpce.<region>.vpce-svc-<id>)."
+  }
+
+  validation {
+    condition = var.snowflake_privatelink == null || try(
+      (length(var.snowflake_privatelink.hostnames) > 0 || !var.snowflake_privatelink.manage_dns) && alltrue([
+        for h in var.snowflake_privatelink.hostnames :
+        can(regex("^(?i)[a-z0-9][a-z0-9.-]*\\.privatelink\\.snowflakecomputing\\.com$", h))
+      ]),
+      false,
+    )
+    error_message = "snowflake_privatelink.hostnames must list the PrivateLink account URLs from SYSTEM$GET_PRIVATELINK_CONFIG, each ending in .privatelink.snowflakecomputing.com. At least one is required unless manage_dns is false."
+  }
+}
+
+variable "legacy_eso_cell_secret_read" {
+  description = "Keep the cell ESO role's account-wide read of RDS-managed (rds!*) secrets for instances still on the old per-instance ClusterSecretStore. Default false: the role denies all secret reads and each instance reads only its own secrets through its own SecretStore. Plan fails while any pavo-aws-sm-* ClusterSecretStore exists and this is false; upgrade those instances, or set true until they are upgraded."
   type        = bool
   default     = false
 }

@@ -8,7 +8,10 @@ module. This file holds everything you reach for less often.
 ## Contents
 
 - [Full resource inventory](#what-it-creates-full-inventory)
+- [Artifact-plane image pins](#artifact-plane-image-pins-mirrored-imagesjson)
 - [S3 / DynamoDB gateway endpoints (adaptive coverage)](#s3--dynamodb-gateway-endpoints-adaptive-coverage)
+- [Route53 interface VPCE](#route53-interface-vpce-host-cluster-external-dns)
+- [Cell interface endpoints (plan-refresh APIs)](#cell-interface-endpoints-plan-refresh-apis)
 - [Permission boundary scoping & verification](#permission-boundary-scoping--verification)
 - [Terraform state: manual backend alternatives](#terraform-state-manual-backend-alternatives)
 - [Brand-new cell: workload-node / `eck_ready` ordering](#brand-new-cell-the-workload-node--eck_ready-ordering)
@@ -17,6 +20,9 @@ module. This file holds everything you reach for less often.
 - [Rotation runbook for the RDS CMK](#rotation-runbook-for-the-rds-cmk)
 - [Scoping notes](#scoping-notes)
 - [In-VPC observability](#in-vpc-observability-self-hosted-grafana--prometheus--otel)
+- [Strict-cell private CA](#strict-cell-private-ca)
+- [MicroVM image-build boundaries](#microvm-image-build-boundaries)
+- [Adding a cell-level readiness gate](#adding-a-cell-level-readiness-gate-two-changes-never-one)
 
 ---
 
@@ -25,16 +31,26 @@ module. This file holds everything you reach for less often.
 ### IAM (account + cell scope)
 
 - **1 IAM role** (cell-scoped):
-  - `pavo-eso-${eks_cluster_name}` — IRSA role assumed by the External Secrets
-    Operator running in your EKS cluster, used to read the RDS-managed master
-    password secret from your AWS Secrets Manager and decrypt it via your CMK.
-- **1 inline role policy**: `pavo-eso-policy-${eks_cluster_name}` — grants ESO
-  `secretsmanager:GetSecretValue` / `DescribeSecret` on `rds!*` and `pavo-*`
-  secrets, plus `kms:Decrypt` / `DescribeKey` scoped via
-  `kms:ViaService = secretsmanager.<region>.amazonaws.com`.
+  - `pavo-eso-${eks_cluster_name}` — IRSA role of the External Secrets
+    Operator controller. It reads no secrets: each Pavo instance reads only its
+    own RDS master secret through its own role (`pavo-eso-<instance_id>`,
+    created by the instance module) and a namespaced `SecretStore`.
+- **1 inline role policy**: `pavo-eso-policy-${eks_cluster_name}` — explicitly
+  denies `secretsmanager:GetSecretValue` / `DescribeSecret` and `kms:Decrypt`.
+  With `legacy_eso_cell_secret_read = true` it instead grants the old
+  account-wide read on `rds!*` secrets (plus `kms:Decrypt` via Secrets
+  Manager) for instances still on a `pavo-aws-sm-<instance_id>`
+  ClusterSecretStore; plan fails while such a store exists and the flag is
+  false.
 - **1 IAM policy (permission boundary, account-scoped)**:
   - `pavo-permission-boundary-shared` — workload boundary attached to Pavo's
     app IAM role (`pavo-role-*`). Source of truth: `policy-statements.json`.
+- **2 IAM policies (MicroVM, account-scoped, opt-in)**:
+  `pavo-permission-boundary-microvm-publisher` and
+  `pavo-permission-boundary-microvm-build`, plus
+  `/pavo/shared/microvm_publisher_boundary_arn` and
+  `/pavo/shared/microvm_build_boundary_arn`. Created when
+  `enable_microvm_image_builds = true`, and retained once either marker exists.
 
 ## Customer-managed-key (CMK) EBS volumes (`gp3-cmk`)
 
@@ -76,7 +92,7 @@ things** because the EBS CSI driver's role must be allowed to use your key:
 > per-key gate.**
 
 Then reference the CMK-backed `gp3-cmk` StorageClass in your PVCs. (On a cell
-whose key already delegates to account root — e.g. our `awstest` — the IAM side
+whose key already delegates to account root — e.g. a same-account cell — the IAM side
 alone provisions CMK volumes; the tag + key policy matter for locked-down
 customer keys.)
 
@@ -88,6 +104,17 @@ customer keys.)
   `terraform-omnistrate-aws/` and was created on every instance create; now
   it's created once here per cell.
 
+### VPC — Route53 interface endpoint (cell scope)
+
+- **0 or 1** interface VPCE `com.amazonaws.route53` (private DNS on), named
+  `pavo-vpce-route53-<eks_cluster_name>`, plus SG `pavo-vpce-sg-<eks_cluster_name>`
+  when this module creates the endpoint. Created only when
+  `network_posture = strict`. Skipped when an available private-DNS Route53
+  interface VPCE already exists, or when the cell is `standard`.
+- **1 annotation** on `external-dns-ns/external-dns` (pod template
+  `pavo.ai/route53-vpce=<vpce-id>`) so a stale resolver is rolled once after
+  the endpoint exists.
+
 ### Helm (cell scope)
 
 - `helm_release.external_secrets` — ESO installed in the `external-secrets`
@@ -95,8 +122,16 @@ customer keys.)
 - `helm_release.stakater_reloader` — Reloader installed in the `reloader`
   namespace, watching globally for Secret/ConfigMap changes.
 - `helm_release.policy_controller` — Sigstore Policy Controller admission
-  webhook installed in the `cosign-system` namespace. Validates ghcr.io/pavoai
-  images against the per-service ClusterImagePolicy objects below.
+  webhook installed in the `cosign-system` namespace. Validates matching
+  `ghcr.io/pavoai/<svc>*` pulls against the per-service ClusterImagePolicy
+  objects below. Private-cell ECR names do not match those globs today.
+- `helm_release.eck_operator` — ECK operator + CRDs, only when `enable_eck = true`.
+- `helm_release.observability_prometheus` / `observability_grafana` /
+  `observability_otel_collector` — in-VPC metrics stack, only when
+  `enable_observability = true`.
+
+All of those releases pin container images from `mirrored-images.json`. See
+[Artifact-plane image pins](#artifact-plane-image-pins-mirrored-imagesjson).
 
 ### Kubernetes (cell scope)
 
@@ -107,6 +142,10 @@ customer keys.)
   IngressClass.
 - `kubectl_manifest.pavo_letsencrypt_prod` — cluster-scoped Let's Encrypt
   ClusterIssuer (HTTP-01).
+- When `install_private_ca = true`: Issuer `pavo-cell-selfsigned`, Certificates
+  `pavo-cell-root-ca` and `pavo-cell-intermediate-ca`, Issuer
+  `pavo-cell-root-issuer`, ClusterIssuer `pavo-private-ca` (`apply_only`).
+  Publishes `/pavo/cells/<cluster>/private_ca_ready`.
 - `kubectl_manifest.pavo_image_policy` — one cluster-scoped ClusterImagePolicy
   per Pavo service (for_each over `image-manifest.json`). Binds each
   `ghcr.io/pavoai/<svc>*` glob to its dedicated Cloud Build signer identity.
@@ -129,21 +168,30 @@ wider repo isn't shipped to them). The canonical source is
 sync when adding a new service.
 
 Mode defaults to `"enforce"` (`var.image_policy_mode`) — admission rejects any
-`ghcr.io/pavoai/**` image that fails cosign signature, SBOM attestation, or
-vuln attestation verification. Per-service signer SAs are provisioned by
-`central-ci/`. During the migration window the shared
+**matching** `ghcr.io/pavoai/<svc>*` image that fails cosign signature, SBOM
+attestation, or vuln attestation verification. Per-service signer SAs are
+provisioned by `central-ci/`. During the migration window the shared
 `cloud-build@<central_ci_project_id>` SA is also accepted — drop that
 authority once every service has migrated to its dedicated SA. Set to
 `"warn"` only for a one-off bake-in on a fresh image lineup before the first
 enforce-mode apply.
 
+Those globs are GHCR names. A private / no-NAT cell pulls the artifact-plane
+ECR rewrite (`omnistrate/images/pavo/ghcr.io/pavoai/...`). Combined with
+`no-match-policy = allow`, that pull is admitted **without** a signature
+check. Digest pin + `crane` copy is the integrity control until CIP globs
+include the ECR names.
+
 ### SSM (account + cell scope)
 
-- **5 cell-scoped** under `/pavo/cells/${eks_cluster_name}/`: `vpc_id`,
+- Cell-scoped under `/pavo/cells/${eks_cluster_name}/`: always `vpc_id`,
   `private_subnet_ids`, `eks_cluster_name`, `eks_oidc_provider`, `eso_role_arn`.
-- **2 account-scoped** under `/pavo/shared/`: `permission_boundary_arn`,
-  `bootstrap_cell` (the single-cell sentinel described under the README's *What it creates* section;
-  `prevent_destroy = true`).
+  Opt-in: `eck_ready`, `network_policy_ready`, `private_ca_ready`,
+  `observability_ready`, `connector_assumable_role_arns`,
+  `strict_egress_extra_destinations`.
+- Account-scoped under `/pavo/shared/`: `permission_boundary_arn`,
+  `bootstrap_cell` (the single-cell sentinel; `prevent_destroy = true`).
+  Opt-in: MicroVM publisher/build boundary ARNs.
 
 ### S3 — OpenTofu provider mirror (cell scope)
 
@@ -177,6 +225,22 @@ bumps** (i.e. whenever `provider-mirror/versions.tf` changes in a new module ver
 > `scripts/render-mirror-providers.py` from `terraform-omnistrate-aws/providers.tf`
 > in the source monorepo; CI (`check-policy-drift`) fails if it drifts. Do not hand-edit it.
 
+---
+
+## Artifact-plane image pins (`mirrored-images.json`)
+
+`mirrored-images.json` is the pin list this module consumes in Helm values and
+the Grafana Postgres image. Each entry is rewritten to
+`<registry>/<prefix>/<upstream-host>/<path>@<digest>` in the artifact-plane
+ECR (`mirrored_images.tf`). A full apply that omits those pins rewrites a
+no-NAT cell to public registries (`ghcr.io`, `docker.elastic.co`,
+`oci.external-secrets.io`, `quay.io`) and `helm_release` `wait=true` hangs on
+`ImagePullBackOff`.
+
+Keep the JSON and the Helm chart-version variables in lockstep: chart keys
+in the JSON (`external_secrets`, `eck_operator`, `reloader`,
+`policy_controller`, `prometheus`, `grafana`, `opentelemetry-collector`) must
+match the chart this module actually installs.
 
 ---
 
@@ -241,6 +305,164 @@ aws ec2 describe-vpc-endpoints --filters \
   --query 'VpcEndpoints[].{id:VpcEndpointId,rts:RouteTableIds}'
 ```
 
+---
+
+## Route53 interface VPCE (host-cluster external-dns)
+
+Omnistrate Monitoring for `ingress-nginx` is not a Helm wait. It resolves
+`$sys.network.externalClusterEndpoint` (for example
+`r-….instance-….hc-….us-east-1.aws.….cloud`) and probes port 443. Host-cluster
+`external-dns` publishes that name. On an endpoint-only / no-NAT cell it cannot
+reach `route53.amazonaws.com` over the internet (`dial tcp 44.x:443: i/o timeout`),
+so the name stays NXDOMAIN and Monitoring stays UNHEALTHY.
+
+**Set `network_posture = "strict"` and apply this module before the first
+strict instance.** A `standard` cell does not create the VPCE. On a
+private-API cell, apply from inside the VPC (or via
+`kubeconfig_path` / `omctl deployment-cell update-kubeconfig`), the same as the
+rest of bootstrap.
+
+What this module does:
+
+1. Creates `com.amazonaws.route53` (global name — not `com.amazonaws.<region>.route53`)
+   with private DNS, one subnet per AZ, 443 from the VPC CIDR, in its own SG
+   `pavo-vpce-route53-sg-<cluster>`.
+2. Assumes no other private-DNS Route53 endpoint in the VPC; AWS rejects a
+   second one, so the apply fails. Delete the stray endpoint, or
+   `terraform import 'aws_vpc_endpoint.route53[0]' <vpce-id>` to adopt it.
+3. Annotates `Deployment/external-dns` in `external-dns-ns` with the VPCE id.
+   That rolls the pod once so it stops using cached public Route53 IPs. Later
+   applies are a no-op. If that Deployment is missing, apply fails on purpose —
+   wait for cell amenities, then re-apply. Do not create a strict instance
+   until this succeeds.
+
+### Accept-test after bootstrap, before instance create
+
+```bash
+aws ec2 describe-vpc-endpoints --filters \
+  Name=vpc-id,Values=<vpc> \
+  Name=service-name,Values=com.amazonaws.route53 \
+  Name=vpc-endpoint-type,Values=Interface \
+  Name=vpc-endpoint-state,Values=available \
+  --query 'VpcEndpoints[].{id:VpcEndpointId,dns:PrivateDnsEnabled,name:Tags[?Key==`Name`].Value|[0]}'
+
+# From any in-VPC pod (not an instance namespace with strict egress):
+# route53.amazonaws.com must resolve to 172.16.* (or the VPC CIDR), not 44.x.
+
+kubectl -n external-dns-ns logs deploy/external-dns --tail=30
+# Expect a zone refresh with no "dial tcp …:443: i/o timeout".
+```
+
+### Accept-test after the first instance
+
+- `ingress-nginx` Service annotation `external-dns.alpha.kubernetes.io/hostname`
+  equals the Omnistrate external cluster endpoint and is **not** empty.
+- `omctl instance list-endpoints <instance>` →
+  `ingress-nginx.additional_endpoints.main.healthStatus == HEALTHY`.
+- `dig <that-name> A` returns the internal NLB addresses.
+
+Leave `network_posture = "standard"` (the default) on NAT cells.
+
+
+---
+
+## Cell interface endpoints (plan-refresh APIs)
+
+On a private / no-NAT cell, instance tofu cannot even *plan* until the AWS
+APIs it *refreshes from existing state* resolve inside the VPC. Those
+Interface VPC endpoints therefore belong in **this** module, applied once per
+cell, **before** the first instance apply.
+
+| Service | AWS service name | Why it is cell-scoped |
+|---|---|---|
+| `kms` | `com.amazonaws.<region>.kms` | `data.aws_kms_key.cell_cmk` in pavoInfra |
+| `secretsmanager` | `com.amazonaws.<region>.secretsmanager` | ESO / RDS master-password refresh |
+| `iam` | `com.amazonaws.iam` (global) | IRSA / permission-boundary attach |
+| `rds` | `com.amazonaws.<region>.rds` | existing DB subnet groups |
+| `elasticache` | `com.amazonaws.<region>.elasticache` | existing cache subnet groups |
+| `sns` | `com.amazonaws.<region>.sns` | existing topics |
+| `sqs` | `com.amazonaws.<region>.sqs` | existing queues / DLQs |
+| `elasticfilesystem` | `com.amazonaws.<region>.elasticfilesystem` | existing EFS |
+| `email` | `com.amazonaws.<region>.email` | SES v2 identity |
+
+Names are `pavo-vpce-<service>-<eks_cluster_name>` so the instance module's
+skip-if-foreign rule (`Name != pavo-vpce-<service>-<instance_id>`) leaves them
+alone. Bedrock stays on instance tofu — it is not in existing state, so it
+does not block plan.
+
+Reuse is the same live-describe as the instance module: skip a service only when
+a **foreign** private-DNS Interface VPCE already exists. Endpoints this module
+named stay in `for_each` and are not destroyed on the next apply.
+
+Create the security group and endpoints only when at least one service is
+missing. `ec2:CreateVpcEndpoint` / `CreateSecurityGroup` are already in the
+runner policy (`EC2CreateVpcEndpointWithRequestTag`,
+`EC2CreateSecurityGroupWithRequestTag` with `managed_by=pavo` and
+`instance=instance-*`). Cell bootstrap apply uses operator credentials, not
+this runner policy; bootstrap VPCEs do not carry an `instance` tag.
+
+EFS mount-target creation, security-group updates, and deletion need the runner's
+EC2 ENI permissions. EFS forwards the caller's permissions; those requests have
+`aws:CalledViaLast=elasticfilesystem.amazonaws.com`. `EC2NetworkInterfacesViaEFS`
+allows them, and `DenyDirectENIWrites` explicitly denies ENI create/modify/delete
+when this service context is missing or names another service. This protects
+untagged cluster ENIs and CNI ENIs carrying `cluster.k8s.amazonaws.com/name` or
+`node.k8s.amazonaws.com/instance_id`, as well as unrelated customer ENIs. The
+runner cannot manufacture this context in a direct EC2 request. See
+[EFS cross-service permissions](https://docs.aws.amazon.com/efs/latest/ug/security_iam_service-with-iam.html)
+and [forward access sessions](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_forward_access_sessions.html).
+
+EFS ENIs are requester-managed and normally untagged; no ownership tag is
+required on the ENI. Their security groups must already have `managed_by=pavo`
+and `instance=instance-*`. The parent EFS operation requires a Pavo-owned file
+system. Interface endpoints retain their separate `CreateVpcEndpoint` /
+`ModifyVpcEndpoint` / `DeleteVpcEndpoints` permissions; endpoint operations use
+instance-tagged SGs and require instance ownership on the endpoint itself.
+Cell-owned endpoints, including Route53, stay outside the runner's scope.
+
+The runner policy is account-wide, so `instance=instance-*` is any Omnistrate
+instance in the account. After creation, later `CreateTags` may reassert
+`managed_by=pavo`, `environment=prod`, and `instance=instance-*`; it must not
+rewrite those to other values. `customer` cannot be pinned to one tenant in this
+account-wide document. Do not use IAM policy variables such as
+`${aws:ResourceTag/instance}` here: Omnistrate embeds this JSON in CloudFormation
+`Fn::Sub`, which rejects `/` in `${...}` names and blocks `AccountConfigSetup`
+reconcile. Non-ownership tag updates and deletion remain allowed. DeleteTags must
+name its keys explicitly; omitting keys would otherwise remove every tag.
+
+The runner may `eks:DescribeCluster` and `eks:AccessKubernetesApi` only on
+`cluster/hc-*`. Access-entry create/associate/disassociate is not granted —
+bootstrap (operator creds) seats the runner entry once per cell. Direct
+`DescribeKey` and KMS grants are limited to keys with `alias/pavo-*`; ViaService
+crypto stays on the workload boundary, not the runner. `iam:UpdateAssumeRolePolicy`
+is only for `pavo-*` / `keda-*` roles tagged `managed_by=pavo` and
+`instance=instance-*`, so bootstrap `pavo-eso-<cluster>` trust stays
+bootstrap-owned. IAM cannot constrain the trust-document body.
+
+Before updating an existing deployment's runner policy, capture its current
+policies and EC2 tags with `scripts/snapshot-runner-ec2-guardrails.sh`. Backfill
+missing canonical ownership tags on instance SGs and endpoints using operator
+credentials **before** enforcing the new policy: the runner cannot claim an
+untagged resource or repair a missing instance tag. Leave cell-owned resources
+without an instance tag. Test a dev instance's EFS create/update/delete lifecycle
+under the candidate policy before a production rollout; IAM simulation checks
+the supplied context, while the dev test verifies the real EFS forwarding path.
+
+On a cell that already has bootstrap state, apply **only** these resources
+first if instance tofu is already hung on `DescribeKey`:
+
+```bash
+tofu apply \
+  -target=aws_security_group.vpc_interface_endpoints \
+  -target=aws_vpc_endpoint.interface
+```
+
+A full apply from outside a private cell will hang on the Kubernetes provider
+(private EKS API). Targeted apply of the two AWS resources does not need kube.
+
+On an existing private cell, create the endpoints so instance plan can reach
+the refresh APIs, then import them into the cell bootstrap state if they were
+applied with `-target`.
 
 ---
 
@@ -264,6 +486,21 @@ ARNs:
 **Footgun**: if `managed_by` is removed from a Pavo EFS file system (via direct
 AWS CLI, not Terraform), subsequent mutations on it will fail — including
 re-tagging it. Don't strip the tag.
+
+**SES sending and identity administration are separate.** `SESSendFromNoreply`
+is boundary-only: it permits `ses:SendEmail` on identity ARNs when
+`ses:FromAddress` matches `noreply@*`, without depending on resource-tag context
+in the send request. The per-instance workload policy remains the exact-domain
+and exact-From-address grant; the boundary alone grants no sending rights.
+This supports customer-owned domains as well as Pavo domains. Creation,
+deletion, DKIM configuration, and ownership-tag protection retain their existing
+tag conditions. The provisioning runner receives no SES sending grant.
+
+Apply the account bootstrap to reconcile this boundary, replacing any manual
+sender-specific exception. IAM permission changes do not complete SES domain
+verification or remove the SES sandbox; those remain separate prerequisites.
+The SES simulation cases include sending without injected resource tags, sender
+restrictions, and the intersection with a per-instance identity policy.
 
 **Describe / List actions stay wildcard** (`"resources": ["*"]`) by AWS IAM
 design — those actions don't accept resource-level permissions. Same constraint
@@ -450,7 +687,7 @@ table: Omnistrate change it without notice, and three parameters that existed on
 the account config, and at least one of them contradicts the template default, so
 check every value on the stack-creation screen instead of clicking through.
 
-| Parameter | Template default | Standard cell | Private cell (BCNC shape) |
+| Parameter | Template default | Standard cell | Private cell |
 |---|---|---|---|
 | `IsBYOCPrivateAccount` | `false` | `false` | **`true`** — selects the private EKS cluster and Lambda-based agent install |
 | `EnablePrivateArtifactRegistry` | `false` | `false` | **`true`** — without it the cell cannot read charts or images from the private registry, so nothing pulls |
@@ -461,7 +698,7 @@ check every value on the stack-creation screen instead of clicking through.
 Two observed traps:
 
 - **`EnableECRHelmChartPull` is defaulted `true` by the template but set `false`
-  by the generated link** on at least one of our accounts (`388371826980`, both
+  by the generated link** on at least one of our accounts (both
   the `cloudformation_url` and `cloudformation_url_no_lb` variants). A customer
   who follows the link as sent gets the wrong value. Read the screen.
 
@@ -543,10 +780,10 @@ one-time tag backfill on the existing EFS file system, **before** re-applying
 the bootstrap with the new boundary. Without the backfill, the new boundary
 would block all mutations on the pre-existing un-tagged file system.
 
-For `awstest`:
+Example:
 
 ```bash
-# 1. Find the awstest EFS file system ID.
+# 1. Find the EFS file system ID.
 aws efs describe-file-systems --region us-east-1 \
   --query "FileSystems[?starts_with(Name, 'pavo-efs-')].FileSystemId" --output text
 
@@ -555,9 +792,9 @@ aws efs tag-resource \
   --resource-id <fs-id-from-step-1> \
   --tags \
     Key=managed_by,Value=pavo \
-    Key=customer,Value=awstest \
+    Key=customer,Value=<customer_name> \
     Key=environment,Value=prod \
-    Key=omnistrate_instance,Value=<awstest-omnistrate-instance-id>
+    Key=omnistrate_instance,Value=<omnistrate-instance-id>
 
 # 3. Verify all 4 tags present.
 aws efs describe-tags --file-system-id <fs-id-from-step-1>
@@ -675,7 +912,7 @@ pools**, only the tainted system pool. Fine for the bootstrap operators (they
 tolerate the taint, above), but it would **deadlock a self-hosted-ES first
 deploy**: `pavoInfra`'s own ES/init-db pods need a workload node, yet the pools
 that would supply one are created by app resources that only deploy *after*
-`pavoInfra` succeeds. A cell that has deployed before (e.g. `awstest`) already has
+`pavoInfra` succeeds. A cell that has deployed before already has
 pools from prior deploys and never hits this.
 
 **Resolved by the `pavo-compute-anchor` resource.** It declares `compute` with
@@ -760,7 +997,7 @@ One CMK per cell encrypts **everything** — RDS storage, the RDS-managed master
 secret, and (on self-hosted cells) the ES / in-VPC-observability EBS volumes.
 Its ARN is the instance `cell_kms_key_arn` apiParameter. There are two cases:
 
-### Quick setup: same-account key (dev/test, e.g. `awstest`) — `scripts/create-cmk.sh`
+### Quick setup: same-account key (dev/test) — `scripts/create-cmk.sh`
 
 When the workload + ESO roles live in the **same account** as the key, a plain
 key with the **default policy (root → `kms:*`)** is sufficient: those roles get
@@ -791,17 +1028,12 @@ regardless of IAM). The 8-statement policy below keeps `EnableRootPermissions`
 (root → `kms:*`) so the account never loses the recovery path, and **adds** the
 explicit workload/ESO grants on top:
 
-1. **First**, run `terraform apply` for this module and capture the ESO role
-   ARN:
-
-   ```bash
-   ESO_ROLE_ARN=$(terraform output -raw eso_role_arn)
-   echo "$ESO_ROLE_ARN"
-   ```
-
-   The CMK key policy (step 3) needs both Omnistrate's workload role ARN AND
-   this ESO role ARN as principals. Without the ESO principal, ESO cannot
-   decrypt the RDS-managed secret at runtime.
+1. **First**, run `terraform apply` for this module. Per-instance roles
+   (`pavo-role-instance-*` for SNS, `pavo-eso-instance-*` for the RDS-managed
+   secret) do not exist yet, and KMS rejects a key policy naming a
+   non-existent principal. So step 3 grants them with one per-cell statement
+   each: principal = account root, narrowed by `aws:PrincipalArn` to the role
+   name pattern. No per-instance key-policy edit is ever needed.
 
 2. Create a **dedicated** KMS key for this cell, then **tag it**:
 
@@ -829,9 +1061,16 @@ explicit workload/ESO grants on top:
      --query "Tags[?TagKey=='omnistrate.com/customer-managed-kms' && TagValue=='true']"
    ```
 
+   **Existing cell, before upgrading its instances to per-instance ESO:** if
+   the key policy has no root delegation (`EnableRootPermissions` removed) and
+   names the old cell ESO role, add `AllowPavoESORolesDecryptViaSecretsManager`
+   (below) first. Otherwise the upgrade deletes `pavo-rds-db-credentials`, the
+   new ExternalSecret cannot decrypt, and the upgrade fails on its `wait_for`
+   with no DB Secret.
+
 3. Attach this **8-statement key policy** (with `<CUSTOMER_ACCOUNT_ID>`,
-   `<OMNISTRATE_WORKLOAD_ROLE_ARN>`, `<ESO_ROLE_ARN_FROM_BOOTSTRAP>`,
-   `<EBS_CSI_DRIVER_ROLE_ARN>`, and `<REGION>` substituted):
+   `<OMNISTRATE_WORKLOAD_ROLE_ARN>`, `<EBS_CSI_DRIVER_ROLE_ARN>`, and
+   `<REGION>` substituted):
 
    ```json
    {
@@ -862,8 +1101,24 @@ explicit workload/ESO grants on top:
          "StringEquals": {
            "kms:ViaService": [
              "rds.<REGION>.amazonaws.com",
-             "secretsmanager.<REGION>.amazonaws.com"
+             "secretsmanager.<REGION>.amazonaws.com",
+             "elasticache.<REGION>.amazonaws.com",
+             "elasticfilesystem.<REGION>.amazonaws.com"
            ]
+         }
+       }
+     },
+     {
+       "Sid": "AllowPavoInstanceRolesPublishToEncryptedSNS",
+       "Effect": "Allow",
+       "Principal": { "AWS": "arn:aws:iam::<CUSTOMER_ACCOUNT_ID>:root" },
+       "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+       "Resource": "*",
+       "Condition": {
+         "ArnLike": { "aws:PrincipalArn": "arn:aws:iam::<CUSTOMER_ACCOUNT_ID>:role/pavo-role-instance-*" },
+         "StringEquals": {
+           "kms:ViaService": "sns.<REGION>.amazonaws.com",
+           "kms:CallerAccount": "<CUSTOMER_ACCOUNT_ID>"
          }
        }
      },
@@ -876,14 +1131,16 @@ explicit workload/ESO grants on top:
        "Condition": { "Bool": { "kms:GrantIsForAWSResource": "true" } }
      },
      {
-       "Sid": "AllowESORoleDecryptViaSecretsManager",
+       "Sid": "AllowPavoESORolesDecryptViaSecretsManager",
        "Effect": "Allow",
-       "Principal": { "AWS": "<ESO_ROLE_ARN_FROM_BOOTSTRAP>" },
-       "Action": ["kms:Decrypt", "kms:DescribeKey"],
+       "Principal": { "AWS": "arn:aws:iam::<CUSTOMER_ACCOUNT_ID>:root" },
+       "Action": "kms:Decrypt",
        "Resource": "*",
        "Condition": {
+         "ArnLike": { "aws:PrincipalArn": "arn:aws:iam::<CUSTOMER_ACCOUNT_ID>:role/pavo-eso-instance-*" },
          "StringEquals": {
-           "kms:ViaService": "secretsmanager.<REGION>.amazonaws.com"
+           "kms:ViaService": "secretsmanager.<REGION>.amazonaws.com",
+           "kms:CallerAccount": "<CUSTOMER_ACCOUNT_ID>"
          }
        }
      },
@@ -967,8 +1224,12 @@ explicit workload/ESO grants on top:
 
 5. **Note on the same CMK serving dual duty**: this single CMK encrypts both
    RDS storage *and* the master-password Secrets Manager secret. Statements
-   2-4 grant the workload role what RDS needs to provision both. Statement 5
-   grants the ESO role what it needs to decrypt the secret at runtime.
+   2, 3 and 5 grant the workload role what RDS needs to provision both.
+   `AllowPavoESORolesDecryptViaSecretsManager` lets each instance's ESO role
+   decrypt its secret at runtime. While `EnableRootPermissions` is in the
+   policy, IAM already grants that (and the SNS statement), so neither is
+   strictly needed; they are what must remain if root delegation is ever
+   removed.
 
 6. The `cell_kms_key_arn` value can be either a **key ARN** (`arn:aws:kms:<region>:<account>:key/<uuid>`)
    or an **alias ARN** (`arn:aws:kms:<region>:<account>:alias/<name>`). Both
@@ -1028,8 +1289,9 @@ possible one.
 ## In-VPC observability (self-hosted Grafana / Prometheus / OTel)
 
 For customers whose telemetry must not leave the VPC (`grafana_mode = self_hosted`).
-Opt-in per cell — a cloud-observability cell must not run an unused
-monitoring stack. Everything installs from this module's single `terraform apply`
+On by default; set `enable_observability = false` on a Grafana Cloud cell so
+it does not run an unused monitoring stack. Everything installs from this
+module's single `terraform apply`
 into the `pavo-observability` namespace: Prometheus (in-VPC TSDB), Grafana
 (internal `pavo-nginx` ingress, dashboards-as-code), Postgres (Grafana backend),
 and the `pavo-otel-collector`. All PVCs bind the customer's one CMK. **Zero
@@ -1043,7 +1305,7 @@ both unset — the default — nothing leaves the cluster.
 
 | Variable | Who sets it | Effect |
 |---|---|---|
-| `enable_observability` | **Pavo operator**, per cell, at bootstrap | Installs the whole stack. Default `false`. Set `true` on any cell that will host a `grafana_mode=self_hosted` instance. |
+| `enable_observability` | **Pavo operator**, per cell, at bootstrap | Installs the whole stack. Default `true`. Set `false` only on a cell whose instances use Grafana Cloud (`grafana_mode = cloud`). |
 | `observability_grafana_host` | Pavo operator | Public hostname Grafana serves at; ingress host becomes `grafana.<this>`. Required when `enable_observability = true`. |
 | `cell_kms_key_arn` | **Customer** (the one CMK) | Encrypts the observability PVCs (`gp3-cmk`). Same key the instance module uses for RDS/ES/Zitadel — one key for everything. |
 | `pavo_app_alerts_enabled` | Pavo operator | Also routes Prometheus alerts to Pavo via the in-VPC sanitizer (8-key metadata only). Default `false` = customer-webhook leg only. Requires a real signed `sanitizer_image` — the sanitizer stays off until that image is built (the cell ClusterImagePolicy admits only signed digests). |
@@ -1217,6 +1479,47 @@ For an urgent fix without a release, apply the ConfigMap directly:
 `kubectl apply -f observability/manifests/<dashboard>.yaml -n pavo-observability`
 (and back-port the edit into the module so the next apply doesn't revert it).
 
+## Strict-cell private CA
+
+A `network_posture = strict` instance issues ingress certs from an in-cell
+private CA instead of Let's Encrypt (HTTP-01 needs egress). Set
+`install_private_ca = true` on that cell. The chain is:
+
+```text
+Issuer pavo-cell-selfsigned
+  → Certificate pavo-cell-root-ca          (MDM trust anchor)
+    → Issuer pavo-cell-root-issuer
+      → Certificate pavo-cell-intermediate-ca
+        → ClusterIssuer pavo-private-ca    (signs ingress leaves)
+```
+
+The root does not sign leaves, so rotating the intermediate does not force a
+root re-push. Objects live in `var.cert_manager_namespace` (default
+`cert-manager-ns`, Omnistrate's amenity namespace — not `cert-manager`).
+Terraform never creates the key Secrets; cert-manager does, and keys never
+enter TF state. All objects are `apply_only`: flipping the flag off withdraws
+`/pavo/cells/<cluster>/private_ca_ready` but does not destroy signing keys.
+
+Pair with `network_policy_ready = true` only after Omnistrate confirms VPC CNI
+NetworkPolicy enforcement. Without that marker a `strict` instance's
+default-deny policies are inert.
+
+## MicroVM image-build boundaries
+
+Set `enable_microvm_image_builds = true` to create the account-scoped
+`pavo-permission-boundary-microvm-publisher` and
+`pavo-permission-boundary-microvm-build` policies and advertise them at
+`/pavo/shared/microvm_publisher_boundary_arn` and
+`/pavo/shared/microvm_build_boundary_arn`. They are separate from the
+workload boundary: app pods never need image-write or Lambda build-role
+permissions.
+
+Once either marker exists, a later apply with the flag `false` **retains**
+the policies. Removing attached boundaries is not a feature toggle. If only
+one of the two markers exists, plan fails until you set the flag true and
+re-apply to reconcile both. Decommission is a separate drain and
+state-owned cleanup, not a flag flip.
+
 ## Adding a cell-level readiness gate (two changes, never one)
 
 `pavo-bootstrap-aws` publishes `/pavo/cells/<cluster>/<marker>` and is applied
@@ -1228,7 +1531,7 @@ instances immediately; the marker reaches a cell only when someone re-bootstraps
 it, and every cell in between fails.
 
 This is not hypothetical. #369 added `observability_ready` and its `pavoInfra`
-precondition in one commit on 2026-08-31. awstest went `FAILED` the same day
+precondition in one commit on 2026-08-31. A live cell went `FAILED` the same day
 with `.../observability_ready does not exist`. The gate was correct; the
 ordering was not. The observability stack had in fact been installed on that
 cell for 41 days — only the marker was missing.
@@ -1237,8 +1540,8 @@ cell for 41 days — only the marker was missing.
 
 1. Add the producer to `pavo-bootstrap-aws` and merge it. Nothing consumes it
    yet, so this is inert.
-2. Re-bootstrap every cell that will later be asked for the marker. awstest
-   reconciles itself via `Release Omnistrate Bootstrap Dev`; customer cells are
+2. Re-bootstrap every cell that will later be asked for the marker. Internal
+   cells reconcile via the bootstrap release workflow; customer cells are
    customer-applied and must be done deliberately.
 3. Only then add the gate to `terraform-omnistrate-aws`.
 

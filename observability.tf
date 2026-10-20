@@ -51,7 +51,7 @@ locals {
 # VPC CIDR for the (staged) egress NetworkPolicy's in-VPC k8s-API allowance.
 data "aws_vpc" "cell" {
   count = local.obs_count
-  id    = var.vpc_id
+  id    = local.vpc_id
 }
 
 # CMK-encrypted gp3 StorageClass for the observability PVCs — the customer's one
@@ -247,7 +247,7 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
         }
         container {
           name  = "postgres"
-          image = "postgres:17"
+          image = local.mirrored.postgres.pull
           port {
             name           = "postgres"
             container_port = 5432
@@ -375,10 +375,52 @@ resource "helm_release" "observability_prometheus" {
   repository = "https://prometheus-community.github.io/helm-charts"
   chart      = "prometheus"
   version    = var.observability_prometheus_chart_version
-  values = [templatefile("${path.module}/observability/prometheus-values.yaml.tftpl", {
-    customer_leg_enabled = var.customer_alert_webhook_url != ""
-    pavo_leg_enabled     = local.obs_sanitizer_enabled
-  })]
+  values = [
+    templatefile("${path.module}/observability/prometheus-values.yaml.tftpl", {
+      customer_leg_enabled = var.customer_alert_webhook_url != ""
+      pavo_leg_enabled     = local.obs_sanitizer_enabled
+    }),
+    yamlencode({
+      alertmanager = {
+        image = {
+          repository = local.mirrored.alertmanager.repository
+          tag        = local.mirrored.alertmanager.tag_at_digest
+        }
+      }
+      configmapReload = {
+        prometheus = {
+          image = {
+            repository = local.mirrored.config_reloader.repository
+            tag        = local.mirrored.config_reloader.tag
+            digest     = local.mirrored.config_reloader.digest
+          }
+        }
+      }
+      "kube-state-metrics" = {
+        image = {
+          registry   = local.mirrored.kube_state_metrics.registry
+          repository = local.mirrored.kube_state_metrics.split_repository
+          sha        = local.mirrored.kube_state_metrics.digest
+          tag        = local.mirrored.kube_state_metrics.tag
+        }
+      }
+      "prometheus-node-exporter" = {
+        image = {
+          registry   = local.mirrored.node_exporter.registry
+          repository = local.mirrored.node_exporter.split_repository
+          digest     = local.mirrored.node_exporter.digest
+          tag        = local.mirrored.node_exporter.tag
+        }
+      }
+      server = {
+        image = {
+          repository = local.mirrored.prometheus.repository
+          tag        = local.mirrored.prometheus.tag
+          digest     = local.mirrored.prometheus.digest
+        }
+      }
+    }),
+  ]
 
   depends_on = [
     kubernetes_namespace_v1.observability,
@@ -405,9 +447,27 @@ resource "helm_release" "observability_grafana" {
   repository = "https://grafana.github.io/helm-charts"
   chart      = "grafana"
   version    = var.observability_grafana_chart_version
-  values = [templatefile("${path.module}/observability/grafana-values.yaml.tftpl", {
-    grafana_host = var.observability_grafana_host
-  })]
+  values = [
+    templatefile("${path.module}/observability/grafana-values.yaml.tftpl", {
+      grafana_host = var.observability_grafana_host
+    }),
+    yamlencode({
+      image = {
+        registry   = local.mirrored.grafana.registry
+        repository = local.mirrored.grafana.split_repository
+        sha        = local.mirrored.grafana.digest_hex
+        tag        = local.mirrored.grafana.tag
+      }
+      sidecar = {
+        image = {
+          registry   = local.mirrored.grafana_sidecar.registry
+          repository = local.mirrored.grafana_sidecar.split_repository
+          sha        = local.mirrored.grafana_sidecar.digest_hex
+          tag        = local.mirrored.grafana_sidecar.tag
+        }
+      }
+    }),
+  ]
 
   depends_on = [
     kubernetes_namespace_v1.observability,
@@ -427,7 +487,16 @@ resource "helm_release" "observability_otel_collector" {
   chart             = "opentelemetry-collector"
   version           = var.observability_otel_collector_chart_version
   dependency_update = true
-  values            = [file("${path.module}/observability/otel-collector-values.yaml")]
+  values = [
+    file("${path.module}/observability/otel-collector-values.yaml"),
+    yamlencode({
+      image = {
+        repository = local.mirrored.otel_collector.repository
+        tag        = local.mirrored.otel_collector.tag
+        digest     = local.mirrored.otel_collector.digest
+      }
+    }),
+  ]
 
   depends_on = [
     kubernetes_namespace_v1.observability,
@@ -496,13 +565,13 @@ data "kubectl_file_documents" "obs_netpol" {
     precondition {
       condition     = local.cell_service_cidr != ""
       error_message = <<-EOT
-        Could not determine the Service CIDR for cell ${var.eks_cluster_name}, so
+        Could not determine the Service CIDR for cell ${local.eks_cluster_name}, so
         the observability egress NetworkPolicy cannot allow in-cluster clients to
         reach the Kubernetes API at its Service ClusterIP.
 
         kubernetes_network_config returned neither service_ipv4_cidr nor
         service_ipv6_cidr for the cluster's ip_family. Check:
-          aws eks describe-cluster --name ${var.eks_cluster_name} \
+          aws eks describe-cluster --name ${local.eks_cluster_name} \
             --query 'cluster.kubernetesNetworkConfig'
       EOT
     }
@@ -540,7 +609,7 @@ data "kubectl_file_documents" "obs_sanitizer" {
   content = templatefile("${path.module}/observability/manifests/sanitizer.yaml.tftpl", {
     sanitizer_image  = var.sanitizer_image
     customer_name    = var.customer_name
-    cell_id          = var.eks_cluster_name
+    cell_id          = local.eks_cluster_name
     aws_region       = data.aws_region.current.name
     ghcr_pull_secret = local.obs_ghcr_pull_secret
   })

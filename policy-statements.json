@@ -77,10 +77,19 @@
     }
   },
   {
+    "sid": "SESSendFromNoreply",
+    "scope": "boundary",
+    "effect": "Allow",
+    "actions": ["ses:SendEmail"],
+    "resources": ["arn:aws:ses:*:*:identity/*"],
+    "conditions": {
+      "StringLike": { "ses:FromAddress": "noreply@*" }
+    }
+  },
+  {
     "sid": "SESMutatingTaggedPavoIdentities",
     "effect": "Allow",
     "actions": [
-      "ses:SendEmail",
       "ses:DeleteEmailIdentity",
       "ses:GetEmailIdentity",
       "ses:ListTagsForResource",
@@ -141,17 +150,10 @@
     "effect": "Allow",
     "actions": [
       "eks:DescribeCluster",
-      "eks:CreateAccessEntry",
-      "eks:DescribeAccessEntry",
-      "eks:ListAccessEntries",
-      "eks:AssociateAccessPolicy",
-      "eks:DisassociateAccessPolicy",
-      "eks:ListAssociatedAccessPolicies",
       "eks:AccessKubernetesApi"
     ],
     "resources": [
-      "arn:aws:eks:*:*:cluster/*",
-      "arn:aws:eks:*:*:access-entry/*"
+      "arn:aws:eks:*:*:cluster/hc-*"
     ]
   },
   {
@@ -208,6 +210,19 @@
     ]
   },
   {
+    "sid": "ConnectorAssumeCustomerRoles",
+    "scope": "boundary",
+    "comment": "Ceiling for connectors that sign in by assuming a role in the customer's own account (Amazon SageMaker's IAM-role mode). It allows sts:AssumeRole only with a Pavo-issued external ID: the prefix pavo-, because the exact value is derived per tenant after the instance exists and cannot be named here. This is a ceiling, not a grant: the workload role's policy in terraform-omnistrate-aws/main.tf names the exact role ARNs from the cell parameter /pavo/cells/<cluster>/connector_assumable_role_arns (set through pavo-bootstrap-aws's connector_assumable_role_arns) and grants nothing while that is unset. The customer's role trust policy must also name the workload role and the exact external ID. Unconditional like the MicroVM ceilings above, so every account bootstrapped from this version carries it.",
+    "effect": "Allow",
+    "actions": ["sts:AssumeRole"],
+    "resources": ["arn:aws:iam::*:role/*"],
+    "conditions": {
+      "StringLike": {
+        "sts:ExternalId": "pavo-*"
+      }
+    }
+  },
+  {
     "sid": "IAMScopedToPavoNames",
     "scope": "runner",
     "effect": "Allow",
@@ -225,7 +240,6 @@
       "iam:ListRolePolicies",
       "iam:ListInstanceProfilesForRole",
       "iam:ListRoleTags",
-      "iam:UpdateAssumeRolePolicy",
       "iam:TagRole",
       "iam:UntagRole"
     ],
@@ -233,6 +247,24 @@
       "arn:aws:iam::*:role/pavo-*",
       "arn:aws:iam::*:role/keda-*"
     ]
+  },
+  {
+    "sid": "IAMUpdateAssumeRoleOnInstanceRoles",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["iam:UpdateAssumeRolePolicy"],
+    "resources": [
+      "arn:aws:iam::*:role/pavo-*",
+      "arn:aws:iam::*:role/keda-*"
+    ],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:ResourceTag/instance": "instance-*"
+      }
+    }
   },
   {
     "sid": "IAMCreateRolesOnlyWithBoundary",
@@ -356,6 +388,9 @@
     "conditions": {
       "StringEquals": {
         "aws:RequestTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:RequestTag/instance": "instance-*"
       }
     }
   },
@@ -367,7 +402,22 @@
     "resources": ["arn:aws:ec2:*:*:vpc/*"]
   },
   {
-    "sid": "EC2VpcEndpointMutations",
+    "sid": "EC2CreateVpcEndpointWithRequestTag",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["ec2:CreateVpcEndpoint"],
+    "resources": ["arn:aws:ec2:*:*:vpc-endpoint/*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:RequestTag/instance": "instance-*"
+      }
+    }
+  },
+  {
+    "sid": "EC2VpcEndpointSupportingResources",
     "scope": "runner",
     "effect": "Allow",
     "actions": [
@@ -376,15 +426,31 @@
       "ec2:DeleteVpcEndpoints"
     ],
     "resources": [
-      "arn:aws:ec2:*:*:vpc-endpoint/*",
       "arn:aws:ec2:*:*:vpc/*",
       "arn:aws:ec2:*:*:subnet/*",
-      "arn:aws:ec2:*:*:security-group/*",
       "arn:aws:ec2:*:*:route-table/*"
     ]
   },
   {
-    "sid": "EC2NetworkInterfaceForMountTargetsAndEndpoints",
+    "sid": "EC2VpcEndpointMutationsOnInstance",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": [
+      "ec2:ModifyVpcEndpoint",
+      "ec2:DeleteVpcEndpoints"
+    ],
+    "resources": ["arn:aws:ec2:*:*:vpc-endpoint/*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:ResourceTag/instance": "instance-*"
+      }
+    }
+  },
+  {
+    "sid": "EC2NetworkInterfacesViaEFS",
     "scope": "runner",
     "effect": "Allow",
     "actions": [
@@ -394,9 +460,49 @@
     ],
     "resources": [
       "arn:aws:ec2:*:*:network-interface/*",
-      "arn:aws:ec2:*:*:subnet/*",
-      "arn:aws:ec2:*:*:security-group/*"
-    ]
+      "arn:aws:ec2:*:*:subnet/*"
+    ],
+    "conditions": {
+      "StringEquals": {
+        "aws:CalledViaLast": "elasticfilesystem.amazonaws.com"
+      }
+    }
+  },
+  {
+    "sid": "DenyDirectENIWrites",
+    "scope": "runner",
+    "effect": "Deny",
+    "actions": [
+      "ec2:CreateNetworkInterface",
+      "ec2:DeleteNetworkInterface",
+      "ec2:ModifyNetworkInterfaceAttribute"
+    ],
+    "resources": ["*"],
+    "conditions": {
+      "StringNotEquals": {
+        "aws:CalledViaLast": "elasticfilesystem.amazonaws.com"
+      }
+    }
+  },
+  {
+    "sid": "EC2UseInstanceSecurityGroup",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": [
+      "ec2:CreateNetworkInterface",
+      "ec2:ModifyNetworkInterfaceAttribute",
+      "ec2:CreateVpcEndpoint",
+      "ec2:ModifyVpcEndpoint"
+    ],
+    "resources": ["arn:aws:ec2:*:*:security-group/*"],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:ResourceTag/instance": "instance-*"
+      }
+    }
   },
   {
     "sid": "EC2SecurityGroupMutationsTaggedPavo",
@@ -413,26 +519,83 @@
     "conditions": {
       "StringEquals": {
         "aws:ResourceTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:ResourceTag/instance": "instance-*"
       }
     }
   },
   {
-    "sid": "EC2TagWritesScopedResources",
+    "sid": "EC2CreateTagsOnInstanceCreate",
     "scope": "runner",
     "effect": "Allow",
-    "actions": [
-      "ec2:CreateTags",
-      "ec2:DeleteTags"
-    ],
+    "actions": ["ec2:CreateTags"],
     "resources": [
       "arn:aws:ec2:*:*:security-group/*",
-      "arn:aws:ec2:*:*:security-group-rule/*",
-      "arn:aws:ec2:*:*:vpc-endpoint/*",
-      "arn:aws:ec2:*:*:network-interface/*"
-    ]
+      "arn:aws:ec2:*:*:vpc-endpoint/*"
+    ],
+    "conditions": {
+      "StringEquals": {
+        "ec2:CreateAction": ["CreateSecurityGroup", "CreateVpcEndpoint"],
+        "aws:RequestTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:RequestTag/instance": "instance-*"
+      }
+    }
+  },
+  {
+    "sid": "EC2TagWritesOnInstanceResources",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["ec2:CreateTags"],
+    "resources": [
+      "arn:aws:ec2:*:*:security-group/*",
+      "arn:aws:ec2:*:*:vpc-endpoint/*"
+    ],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:ResourceTag/instance": "instance-*"
+      },
+      "StringEqualsIfExists": {
+        "aws:RequestTag/managed_by": "pavo",
+        "aws:RequestTag/environment": "prod"
+      },
+      "StringLikeIfExists": {
+        "aws:RequestTag/instance": "instance-*"
+      }
+    }
+  },
+  {
+    "sid": "EC2UntagInstanceResourcesExceptOwnership",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["ec2:DeleteTags"],
+    "resources": [
+      "arn:aws:ec2:*:*:security-group/*",
+      "arn:aws:ec2:*:*:vpc-endpoint/*"
+    ],
+    "conditions": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "pavo"
+      },
+      "StringLike": {
+        "aws:ResourceTag/instance": "instance-*"
+      },
+      "ForAllValues:StringNotEquals": {
+        "aws:TagKeys": ["managed_by", "instance", "customer", "environment"]
+      },
+      "Null": {
+        "aws:TagKeys": "false"
+      }
+    }
   },
   {
     "sid": "KMSUseOnCustomerKey",
+    "scope": "boundary",
     "effect": "Allow",
     "actions": [
       "kms:DescribeKey",
@@ -450,7 +613,9 @@
           "secretsmanager.*.amazonaws.com",
           "elasticache.*.amazonaws.com",
           "elasticfilesystem.*.amazonaws.com",
-          "s3.*.amazonaws.com"
+          "s3.*.amazonaws.com",
+          "sns.*.amazonaws.com",
+          "sqs.*.amazonaws.com"
         ]
       }
     }
@@ -460,7 +625,19 @@
     "scope": "runner",
     "effect": "Allow",
     "actions": ["kms:DescribeKey"],
-    "resources": ["*"]
+    "resources": ["arn:aws:kms:*:*:key/*"],
+    "conditions": {
+      "ForAnyValue:StringLike": {
+        "kms:ResourceAliases": "alias/pavo-*"
+      }
+    }
+  },
+  {
+    "sid": "KMSDescribeCustomerKeyByAlias",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["kms:DescribeKey"],
+    "resources": ["arn:aws:kms:*:*:alias/pavo-*"]
   },
   {
     "sid": "KMSGrantsForAWSResources",
@@ -471,10 +648,62 @@
       "kms:ListGrants",
       "kms:RevokeGrant"
     ],
-    "resources": ["*"],
+    "resources": ["arn:aws:kms:*:*:key/*"],
     "conditions": {
       "Bool": {
         "kms:GrantIsForAWSResource": "true"
+      },
+      "ForAnyValue:StringLike": {
+        "kms:ResourceAliases": "alias/pavo-*"
+      }
+    }
+  },
+  {
+    "sid": "KMSDescribeKeyViaRDS",
+    "comment": "RDS create with manage_master_user_password describes aws/secretsmanager even when MasterUserSecretKmsKeyId is the cell CMK (AWS-documented). Metadata only.",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["kms:DescribeKey"],
+    "resources": ["arn:aws:kms:*:*:key/*"],
+    "conditions": {
+      "ForAnyValue:StringLike": {
+        "kms:ResourceAliases": "alias/aws/secretsmanager"
+      },
+      "StringLike": {
+        "kms:ViaService": "rds.*.amazonaws.com"
+      }
+    }
+  },
+  {
+    "sid": "KMSEFSDataKeyOnCustomerKey",
+    "comment": "EFS CreateFileSystem generates the file system's encrypted data key as the caller.",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["kms:GenerateDataKeyWithoutPlaintext"],
+    "resources": ["arn:aws:kms:*:*:key/*"],
+    "conditions": {
+      "ForAnyValue:StringLike": {
+        "kms:ResourceAliases": "alias/pavo-*"
+      },
+      "StringLike": {
+        "kms:ViaService": "elasticfilesystem.*.amazonaws.com"
+      }
+    }
+  },
+  {
+    "sid": "KMSRDSSecretOnCustomerKey",
+    "comment": "RDS create writes and reads back its rds! master secret, encrypted with the cell CMK, as the caller.",
+    "scope": "runner",
+    "effect": "Allow",
+    "actions": ["kms:GenerateDataKey", "kms:Decrypt"],
+    "resources": ["arn:aws:kms:*:*:key/*"],
+    "conditions": {
+      "ForAnyValue:StringLike": {
+        "kms:ResourceAliases": "alias/pavo-*"
+      },
+      "StringLike": {
+        "kms:ViaService": "secretsmanager.*.amazonaws.com",
+        "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:*:*:secret:rds!*"
       }
     }
   }

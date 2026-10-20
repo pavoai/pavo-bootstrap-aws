@@ -54,11 +54,11 @@
 # stable, and Pavo should not race in to rewrite gateway routing.
 
 data "aws_route_tables" "cell" {
-  vpc_id = var.vpc_id
+  vpc_id = local.vpc_id
 }
 
 data "aws_route_table" "main" {
-  vpc_id = var.vpc_id
+  vpc_id = local.vpc_id
   filter {
     name   = "association.main"
     values = ["true"]
@@ -79,7 +79,7 @@ locals {
 # Omnistrate's cell-owned gateway endpoints. Scoped to this exact cell
 # (host-cluster-id) and the `available` state so exactly one resolves.
 data "aws_vpc_endpoint" "omnistrate_s3" {
-  vpc_id       = var.vpc_id
+  vpc_id       = local.vpc_id
   service_name = local.s3_service_name
   state        = "available"
   filter {
@@ -88,7 +88,7 @@ data "aws_vpc_endpoint" "omnistrate_s3" {
   }
   filter {
     name   = "tag:omnistrate.com/host-cluster-id"
-    values = [var.eks_cluster_name]
+    values = [local.eks_cluster_name]
   }
   filter {
     name   = "tag:omnistrate.com/managed-by"
@@ -97,7 +97,7 @@ data "aws_vpc_endpoint" "omnistrate_s3" {
 }
 
 data "aws_vpc_endpoint" "omnistrate_dynamodb" {
-  vpc_id       = var.vpc_id
+  vpc_id       = local.vpc_id
   service_name = local.ddb_service_name
   state        = "available"
   filter {
@@ -106,7 +106,7 @@ data "aws_vpc_endpoint" "omnistrate_dynamodb" {
   }
   filter {
     name   = "tag:omnistrate.com/host-cluster-id"
-    values = [var.eks_cluster_name]
+    values = [local.eks_cluster_name]
   }
   filter {
     name   = "tag:omnistrate.com/managed-by"
@@ -122,7 +122,7 @@ locals {
 
 resource "aws_vpc_endpoint" "s3_gateway" {
   count             = length(local.s3_missing_route_table_ids) > 0 ? 1 : 0
-  vpc_id            = var.vpc_id
+  vpc_id            = local.vpc_id
   service_name      = local.s3_service_name
   vpc_endpoint_type = "Gateway"
   route_table_ids   = local.s3_missing_route_table_ids
@@ -135,7 +135,7 @@ resource "aws_vpc_endpoint" "s3_gateway" {
 
 resource "aws_vpc_endpoint" "dynamodb_gateway" {
   count             = length(local.ddb_missing_route_table_ids) > 0 ? 1 : 0
-  vpc_id            = var.vpc_id
+  vpc_id            = local.vpc_id
   service_name      = local.ddb_service_name
   vpc_endpoint_type = "Gateway"
   route_table_ids   = local.ddb_missing_route_table_ids

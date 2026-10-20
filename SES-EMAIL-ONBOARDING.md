@@ -43,11 +43,12 @@ email_enabled = false
 
 This wires no email backend, returns 403 from the OTP endpoints, and makes
 invitation flows return a copyable `invitation_link` in the API response instead
-of sending mail. Applies to BCNC (AWS, air-gapped) and any GCP-strict cell.
+of sending mail. Applies to AWS air-gapped / strict cells and any GCP-strict
+cell.
 
-Until the `network_posture` flag exists to enforce it at plan time, this is an
-operational rule: verify a strict instance's plan shows no SES identity /
-endpoint (AWS) and that `email_enabled=false` (GCP) before go-live.
+`network_posture` does not force `email_enabled = false`. Verify a strict
+instance's plan shows no SES identity / endpoint (AWS) and that
+`email_enabled=false` (GCP) before go-live.
 
 ## Migration note
 
