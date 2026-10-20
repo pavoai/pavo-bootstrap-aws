@@ -19,7 +19,7 @@
 # something to opt out of per cell.
 
 locals {
-  provider_mirror_bucket = "pavo-tf-mirror-${var.eks_cluster_name}"
+  provider_mirror_bucket = "pavo-tf-mirror-${local.eks_cluster_name}"
 }
 
 resource "aws_s3_bucket" "provider_mirror" {
@@ -88,7 +88,7 @@ resource "aws_s3_bucket_policy" "provider_mirror" {
         Action    = "s3:GetObject"
         Resource  = "${aws_s3_bucket.provider_mirror.arn}/*"
         Condition = {
-          StringEquals = { "aws:SourceVpc" = var.vpc_id }
+          StringEquals = { "aws:SourceVpc" = local.vpc_id }
         }
       },
       {

@@ -8,7 +8,8 @@
 # account, before the first `terraform init` for any cell in it.
 #
 # Naming convention (derived from the caller's account ID — do not hand-name):
-#   S3 bucket   = pavo-tf-state-<account-id>   (versioned, AES256, public-blocked)
+#   S3 bucket   = pavo-tf-state-<account-id>   (versioned, SSE-KMS under the cell CMK
+#                 when one is passed, else AES256; public-blocked)
 #   Lock table  = pavo-tf-state-locks          (DynamoDB, LockID hash key)
 #   State key   = pavo-bootstrap-aws/<cluster>/terraform.tfstate   (per cell)
 #
@@ -17,8 +18,9 @@
 # this doubles as a drift-fixer. Does NOT delete anything.
 #
 # Usage:
-#   AWS_PROFILE=<account-profile> ./scripts/create-state-backend.sh [region]
+#   AWS_PROFILE=<account-profile> ./scripts/create-state-backend.sh [region] [kms-key-arn]
 #     region defaults to us-east-1 (matches the deployment cells).
+#     kms-key-arn: the cell CMK (create-cmk.sh); state can hold sensitive values.
 #
 # After it prints the backend config, commit it as
 # cells/<cluster>/backend.s3.tfbackend and init with:
@@ -27,6 +29,7 @@
 set -euo pipefail
 
 REGION="${1:-us-east-1}"
+KMS_KEY_ARN="${2:-}"
 
 command -v aws >/dev/null 2>&1 || { echo "[FAIL] aws CLI not found" >&2; exit 1; }
 
@@ -68,9 +71,12 @@ fi
 # State-bucket hygiene — idempotent, re-asserted on every run.
 aws s3api put-bucket-versioning --bucket "${BUCKET}" \
   --versioning-configuration Status=Enabled
-aws s3api put-bucket-encryption --bucket "${BUCKET}" \
-  --server-side-encryption-configuration \
-  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+if [ -n "${KMS_KEY_ARN}" ]; then
+  SSE='{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms","KMSMasterKeyID":"'"${KMS_KEY_ARN}"'"},"BucketKeyEnabled":true}]}'
+else
+  SSE='{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+fi
+aws s3api put-bucket-encryption --bucket "${BUCKET}" --server-side-encryption-configuration "${SSE}"
 aws s3api put-public-access-block --bucket "${BUCKET}" \
   --public-access-block-configuration \
   BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
@@ -80,7 +86,7 @@ TLS_POLICY="$(cat <<JSON
 JSON
 )"
 aws s3api put-bucket-policy --bucket "${BUCKET}" --policy "${TLS_POLICY}"
-echo "[ok]   versioning + AES256 encryption + public-access-block + TLS-only policy enforced"
+echo "[ok]   versioning + ${KMS_KEY_ARN:+SSE-KMS }encryption + public-access-block + TLS-only policy enforced"
 
 # --- DynamoDB lock table ---------------------------------------------------
 if aws dynamodb describe-table --table-name "${TABLE}" --region "${REGION}" >/dev/null 2>&1; then

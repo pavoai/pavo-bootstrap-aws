@@ -78,7 +78,7 @@ resource "kubectl_manifest" "private_ca_root" {
     }
     spec = {
       isCA        = true
-      commonName  = "pavo-cell-root-ca-${var.eks_cluster_name}"
+      commonName  = "pavo-cell-root-ca-${local.eks_cluster_name}"
       secretName  = local.private_ca_root_secret
       duration    = "175200h" # 20y — the trust anchor; long-lived by design.
       renewBefore = "17520h"  # 2y
@@ -152,7 +152,7 @@ resource "kubectl_manifest" "private_ca_intermediate" {
     }
     spec = {
       isCA        = true
-      commonName  = "pavo-cell-intermediate-ca-${var.eks_cluster_name}"
+      commonName  = "pavo-cell-intermediate-ca-${local.eks_cluster_name}"
       secretName  = local.private_ca_int_secret
       duration    = "43800h" # 5y
       renewBefore = "4380h"  # 6mo
@@ -211,7 +211,7 @@ resource "kubectl_manifest" "private_ca_cluster_issuer" {
 resource "aws_ssm_parameter" "private_ca_ready" {
   count = local.private_ca_count
 
-  name  = "/pavo/cells/${var.eks_cluster_name}/private_ca_ready"
+  name  = "/pavo/cells/${local.eks_cluster_name}/private_ca_ready"
   type  = "String"
   value = "true"
 

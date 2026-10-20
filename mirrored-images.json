@@ -1,0 +1,104 @@
+{
+  "registry": "493807289773.dkr.ecr.us-east-2.amazonaws.com",
+  "prefix": "omnistrate/images/pavo",
+  "images": {
+    "external_secrets": {
+      "chart": "external-secrets",
+      "chart_version": "0.10.4",
+      "repository": "oci.external-secrets.io/external-secrets/external-secrets",
+      "tag": "v0.10.4",
+      "digest": "sha256:da1a2ea3f7e855b2fafed792740151edffd7935cfc34542ec6715da30e65ac92"
+    },
+    "eck_operator": {
+      "chart": "eck-operator",
+      "chart_version": "3.4.0",
+      "repository": "docker.elastic.co/eck/eck-operator",
+      "tag": "3.4.0",
+      "digest": "sha256:768fa7b503666251d4ed3161b4f60e933b84301b9ea21012f3e7160e0661759c"
+    },
+    "reloader": {
+      "chart": "reloader",
+      "chart_version": "1.1.0",
+      "repository": "ghcr.io/stakater/reloader",
+      "tag": "v1.1.0",
+      "digest": "sha256:a6d34801a2b7d38f38a93c72cf8a6a16ceedd510df6c4d25b269bf52b789450a"
+    },
+    "policy_controller": {
+      "chart": "policy-controller",
+      "chart_version": "0.10.6",
+      "repository": "ghcr.io/sigstore/policy-controller/policy-controller",
+      "tag": "v0.13.1",
+      "digest": "sha256:0bcd60beb93f4427c29cf3a669743caf58490e98ded4380c33c09f092734a6ab"
+    },
+    "leases_cleanup": {
+      "chart": "policy-controller",
+      "chart_version": "0.10.6",
+      "repository": "cgr.dev/chainguard/kubectl",
+      "tag": "latest-dev",
+      "digest": "sha256:3f70cb33c191ee3be6be1546547a059dc505397d85931c2b1abec4f8327f6af2"
+    },
+    "prometheus": {
+      "chart": "prometheus",
+      "chart_version": "29.17.0",
+      "repository": "quay.io/prometheus/prometheus",
+      "tag": "v3.13.1",
+      "digest": "sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893"
+    },
+    "config_reloader": {
+      "chart": "prometheus",
+      "chart_version": "29.17.0",
+      "repository": "quay.io/prometheus-operator/prometheus-config-reloader",
+      "tag": "v0.92.1",
+      "digest": "sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48"
+    },
+    "alertmanager": {
+      "chart": "prometheus",
+      "chart_version": "29.17.0",
+      "repository": "quay.io/prometheus/alertmanager",
+      "tag": "v0.33.1",
+      "digest": "sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d"
+    },
+    "kube_state_metrics": {
+      "chart": "prometheus",
+      "chart_version": "29.17.0",
+      "repository": "registry.k8s.io/kube-state-metrics/kube-state-metrics",
+      "tag": "v2.19.1",
+      "digest": "sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1"
+    },
+    "node_exporter": {
+      "chart": "prometheus",
+      "chart_version": "29.17.0",
+      "repository": "quay.io/prometheus/node-exporter",
+      "tag": "v1.12.0",
+      "digest": "sha256:9b0ade5e607f9dbedb0a8e11151b6011ae5bd79304c261804cfdd2cadf200a80"
+    },
+    "grafana": {
+      "chart": "grafana",
+      "chart_version": "10.5.15",
+      "repository": "docker.io/grafana/grafana",
+      "tag": "12.3.1",
+      "digest": "sha256:2175aaa91c96733d86d31cf270d5310b278654b03f5718c59de12a865380a31f"
+    },
+    "grafana_sidecar": {
+      "chart": "grafana",
+      "chart_version": "10.5.15",
+      "repository": "quay.io/kiwigrid/k8s-sidecar",
+      "tag": "2.5.0",
+      "digest": "sha256:a6b3f707f883108376514489a94d6629109a327b2978e1d826cd104c4ca436df"
+    },
+    "otel_collector": {
+      "chart": "opentelemetry-collector",
+      "chart_version": "0.108.0",
+      "repository": "docker.io/otel/opentelemetry-collector-contrib",
+      "tag": "0.111.0",
+      "digest": "sha256:a2a52e43c1a80aa94120ad78c2db68780eb90e6d11c8db5b3ce2f6a0cc6b5029"
+    },
+    "postgres": {
+      "chart": "",
+      "chart_version": "",
+      "repository": "docker.io/library/postgres",
+      "tag": "17",
+      "digest": "sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f"
+    }
+  }
+}
