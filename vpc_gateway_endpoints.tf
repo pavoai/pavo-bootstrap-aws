@@ -6,8 +6,8 @@
 # for DIFFERENT reasons, and only S3 is about pod traffic:
 #
 #   S3       - pod traffic. Pods reach S3 (ES snapshots, app buckets) over the
-#              gateway endpoint; that is also what sets aws:SourceVpc and lets a
-#              strict default-deny cell with NAT blocked still reach S3.
+#              gateway endpoint; that is also what sets aws:SourceVpc and lets
+#              pods under the strict default-deny egress policy still reach S3.
 #
 #   DynamoDB - NOT pod traffic. No Pavo pod uses DynamoDB, which is why the strict
 #              egress NetworkPolicy in terraform-omnistrate-aws/network_policies.tf

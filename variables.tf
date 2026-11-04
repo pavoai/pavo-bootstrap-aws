@@ -157,12 +157,14 @@ variable "enable_eck" {
 
 variable "network_posture" {
   description = <<-EOT
-    Cell network posture. Mirrors the instance apiParameter: 'standard' (default —
-    NAT / public egress allowed) or 'strict' (dedicated zero-egress / endpoint-only
-    cell). Strict cells need the Route53 interface VPCE so host-cluster external-dns
-    can publish Omnistrate ingress names without NAT. Dedicated strict cells only
-    (1 cell = 1 customer). Gates the Route53 interface VPCE and switches the
-    Grafana ingress issuer to pavo-selfsigned (no egress for ACME on strict).
+    Cell network posture: 'standard' (default) or 'strict'. The instance
+    apiParameter of the same name is set separately; a strict deployment sets
+    both. On 'strict' this module selects the strict permission boundary
+    (rendered-permission-boundary-strict.json), creates the Route53 interface
+    VPCE (host-cluster external-dns publishes Omnistrate ingress names through
+    it on a private cell), and switches the Grafana ingress issuer to
+    pavo-selfsigned (no ACME HTTP-01 behind an internal load balancer).
+    Dedicated strict cells only (1 cell = 1 customer).
   EOT
   type        = string
   default     = "standard"
@@ -310,7 +312,8 @@ variable "customer_alert_cidr" {
   description = <<-EOT
     CIDR of the customer's own alert receiver, for the Alertmanager egress
     NetworkPolicy leg (inert until CNI network-policy enforcement is on). Empty =
-    that leg is not rendered; the SG-level egress default-deny remains the control.
+    that leg is not rendered, so once enforcement is on the observability
+    policy opens no path to the receiver.
   EOT
   type        = string
   default     = ""
@@ -372,10 +375,11 @@ variable "observability_otel_collector_chart_version" {
 
 variable "cell_kms_key_arn" {
   description = <<-EOT
-    The cell's single customer-managed KMS key ARN — encrypts everything at rest
-    under the customer's own key (RDS, self-hosted ES + snapshots, and the in-VPC
-    observability volumes). One key for the whole deployment: least customer
-    effort, uniform key custody. Required when enable_observability = true (used
+    The cell's single customer-managed KMS key ARN — encrypts, under the
+    customer's own key, the stores this cell and its instances create (RDS,
+    self-hosted ES + snapshots, and the in-VPC observability volumes).
+    Kubernetes Secrets and Terraform state are not under it. One key for the
+    whole deployment: least customer effort, uniform key custody. Required when enable_observability = true (used
     for the gp3-cmk StorageClass the observability PVCs bind to).
   EOT
   type        = string
@@ -389,10 +393,12 @@ variable "kubeconfig_path" {
     cluster and authenticates with `aws eks get-token`, which is correct for every
     cell whose Kubernetes API is publicly reachable.
 
-    Set this only for a PRIVATE-ONLY cell. Such a cell has
-    `endpointPublicAccess = false`, so the derived endpoint resolves to private IPs
-    and cannot be dialled from outside the VPC, whatever IAM permissions the caller
-    holds. In practice the file comes from
+    Set this only for a PRIVATE-ONLY cell whose API the caller cannot reach.
+    Such a cell has `endpointPublicAccess = false`, so the derived endpoint
+    resolves to private IPs and cannot be dialled from outside the VPC, whatever
+    IAM permissions the caller holds; a caller inside the VPC, or on Client VPN
+    or peering into it (scripts/create-cell-vpn.sh), keeps the default. Otherwise
+    the file comes from
     `omnistrate-ctl deployment-cell update-kubeconfig <cell> --role cluster-admin` (run by Pavo),
     which targets an Omnistrate-side proxy and uses client certificates instead of
     an exec plugin. That proxy port is gated by the account CloudFormation

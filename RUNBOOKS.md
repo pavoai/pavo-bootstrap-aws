@@ -221,8 +221,8 @@ route so this traffic stays private in-VPC. The two services are carried for
 **different** reasons, and only one of them is about pods:
 
 - **S3** — pod traffic. Pods reach S3 (the ES snapshot bucket, app buckets) over the
-  gateway endpoint, which is also what sets `aws:SourceVpc` and lets a strict
-  default-deny cell with NAT blocked still reach S3.
+  gateway endpoint, which is also what sets `aws:SourceVpc` and lets pods under
+  the strict default-deny egress policy still reach S3.
 - **DynamoDB** — **not** pod traffic. No Pavo pod uses DynamoDB; the strict egress
   NetworkPolicy in `terraform-omnistrate-aws/network_policies.tf` deliberately omits
   it for exactly that reason, and the two files must not drift apart on this. The one
@@ -599,8 +599,10 @@ mutating the management VPCE security group. true allows the regional K8S proxy
 port; false removes it; default leaves the existing setting unchanged." On a
 private-only cell that port is what makes `omnistrate-ctl deployment-cell
 update-kubeconfig <cell> --role cluster-admin` able to reach the Kubernetes API,
-which is in turn what lets this module be applied at all — a private cell's API
-has no public endpoint. You can flip it back at any time.
+the path behind `kubeconfig_path`. It is your choice: applying this module from
+inside the VPC, or over Client VPN or peering into it
+(`scripts/create-cell-vpn.sh`), reaches the private API without it. You can flip
+it back at any time.
 
 Two further customer-held controls, both defaulting sensibly: `AgentInfrastructureMutationEnabled`
 (default `true`; set `false` outside approved change windows to freeze Omnistrate
@@ -871,12 +873,17 @@ regardless of IAM). The policy below keeps `EnableRootPermissions`
 (root → `kms:*`) so the account never loses the recovery path, and **adds** the
 explicit workload/ESO grants on top:
 
-1. **First**, run `terraform apply` for this module. Per-instance roles
-   (`pavo-role-instance-*` for SNS, `pavo-eso-instance-*` for the RDS-managed
-   secret) do not exist yet, and KMS rejects a key policy naming a
-   non-existent principal. So step 3 grants them with one per-cell statement
-   each: principal = account root, narrowed by `aws:PrincipalArn` to the role
-   name pattern. No per-instance key-policy edit is ever needed.
+1. **Order.** The key exists before the bootstrap apply: `run-bootstrap.sh`
+   takes its ARN as an input, and `scripts/create-cmk.sh` (or step 2 by hand)
+   creates it. The EBS CSI statements in step 3 name the Omnistrate-managed
+   EBS CSI driver role, which exists once the cell cluster does, so attach the
+   policy after the cluster is created and before the bootstrap apply.
+   Per-instance roles (`pavo-role-instance-*` for SNS, `pavo-eso-instance-*`
+   for the RDS-managed secret) do not exist at that point, and KMS rejects a
+   key policy naming a non-existent principal, so step 3 grants them with one
+   per-cell statement each: principal = account root, narrowed by
+   `aws:PrincipalArn` to the role name pattern. No per-instance key-policy
+   edit is ever needed.
 
 2. Create a **dedicated** KMS key for this cell, then **tag it**:
 

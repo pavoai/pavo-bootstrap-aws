@@ -23,7 +23,7 @@ for customer consumption.
 ```hcl
 # Production deployments: pin to a tag.
 module "pavo_bootstrap" {
-  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.0"
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.1"
   # ...
 }
 
@@ -238,14 +238,14 @@ export AWS_REGION=us-east-1           # your region
 | `external_secrets_chart_version` | Helm chart version for `external-secrets/external-secrets`. Default `0.10.4` (v1beta1 CRDs). The image tag stays in `mirrored-images.json`; bump both together and check SecretStore compatibility. |
 | `reloader_chart_version` | Helm chart version for `stakater/reloader`. Default `1.1.0`. The image tag stays in `mirrored-images.json`; bump both together. |
 | `central_ci_project_id` | GCP project hosting Pavo's central Cloud Build that builds + signs all `ghcr.io/pavoai/*` images. Default `onboarding-455713`. The per-service signing SAs live here as `cloud-build-<service>@<central_ci_project_id>.iam.gserviceaccount.com`. Override only if you've forked the signing pipeline into a different GCP project. |
-| `network_posture` | Cell posture: `standard` (default) or `strict`. On `strict` the Route53 interface VPCE is created and the Grafana ingress uses `pavo-selfsigned` instead of Let's Encrypt. Set `strict` on a dedicated zero-egress cell before the first instance. See [RUNBOOKS.md → Route53 interface VPCE](RUNBOOKS.md#route53-interface-vpce-host-cluster-external-dns). |
+| `network_posture` | Cell posture: `standard` (default) or `strict`. On `strict` the Route53 interface VPCE is created and the Grafana ingress uses `pavo-selfsigned` instead of Let's Encrypt. Set `strict` on a dedicated strict cell before the first instance; the instance parameter of the same name is set separately, and a strict deployment sets both. See [RUNBOOKS.md → Route53 interface VPCE](RUNBOOKS.md#route53-interface-vpce-host-cluster-external-dns). |
 | `enable_eck` | Install the Elastic Cloud on Kubernetes (ECK) operator on this cell. **Default `false`.** Set `true` **only** on a cell that will host a self-hosted in-VPC Elasticsearch instance (`es_mode = self_hosted`). Cloud-Elasticsearch-only cells should leave it off to avoid an idle operator, CRDs, and validating webhook. When `true`, the cell publishes `/pavo/cells/<eks_cluster_name>/eck_ready=true`; the per-instance module reads that and **fails fast** if a `self_hosted` instance is created before ECK exists. `scripts/run-bootstrap.sh` passes `true`: new cells run self-hosted Elasticsearch. |
 | `eck_operator_chart_version` | Helm chart version for `elastic/eck-operator` (operator + CRDs move in lockstep). Default `3.4.0`. Only relevant when `enable_eck = true`. Confirm the ECK ↔ Elasticsearch support matrix before bumping (ECK 3.x supports the 8.x and 9.x stacks). |
 | `network_policy_ready` | Operator assertion that AWS VPC CNI NetworkPolicy enforcement is on. **Default `false`.** Set `true` only after Omnistrate confirms it. Publishes `/pavo/cells/<cluster>/network_policy_ready`; a `strict` instance fails fast without it. |
 | `enable_observability` | Install in-VPC Prometheus + Grafana + OTel. **Default `true`.** Requires `cell_kms_key_arn` and `observability_grafana_host`. Set `false` only on Grafana Cloud cells (`grafana_mode = cloud`). |
 | `observability_grafana_host` | Public hostname Grafana is served at (`grafana.<this>`). Required when `enable_observability = true`. On a strict cell the browser trusts only the NLB's ACM certificate, whose SANs are `<app_domain>`, `*.<app_domain>`, `<customer>.<base_domain>`, `*.<customer>.<base_domain>` (pavo-cert-aws), so this must be the instance's `app_domain` (or `<customer>.<base_domain>`). |
 | `cell_kms_key_arn` | Cell customer-managed KMS key ARN (`gp3-cmk` plus workload encryption). Required when `enable_observability = true`. |
-| `kubeconfig_path` | Kubeconfig for Kubernetes-facing providers. Empty (default) uses `aws eks get-token`. Set only for a private-only cell whose API is not publicly reachable. |
+| `kubeconfig_path` | Kubeconfig for Kubernetes-facing providers. Empty (default) uses `aws eks get-token`, which also works from inside the VPC or over Client VPN. Set only when the caller cannot reach a private-only cell's API. |
 | `enable_microvm_image_builds` | Create the account-owned MicroVM publisher/build permission boundaries. **Default `false`.** Once either `/pavo/shared/microvm_*_boundary_arn` marker exists, `false` retains them. |
 | `legacy_eso_cell_secret_read` | Keep the cell ESO role's account-wide `rds!*` secret read. **Default `false`.** Plan fails while any `pavo-aws-sm-*` ClusterSecretStore exists and this is false. |
 | `connector_assumable_role_arns` | Exact IAM role ARNs in your accounts that Pavo's connectors may assume (Amazon SageMaker IAM-role mode). **Default empty.** Publishes them for the instance's workload role, which may then assume exactly these roles. The permission boundary's always-present ceiling limits this to a Pavo-issued external ID, and your role's trust policy requires the exact one. See *Connector access from a strict cell*. |
@@ -362,7 +362,7 @@ browsers already trust.
 
 ## Consuming as a child module (cross-account BYOC)
 
-Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.0`)
+Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.1`)
 and consume this repo as a child module. **The AWS provider is caller-owned** — this
 module declares no `provider "aws"` block, so it inherits the provider you configure
 in your root (region, credentials, `assume_role`). Region is read back from that
@@ -375,7 +375,7 @@ implicitly, so only `aws` needs mapping):
 
 ```hcl
 module "pavo_bootstrap" {
-  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.0"
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.1"
 
   providers = { aws = aws.cell }   # only if your aws provider is aliased
 
@@ -431,7 +431,7 @@ rm -f "$KCFG"
 
 ## Strict-cell flags (`network_posture`, `network_policy_ready`)
 
-A zero-egress cell sets `network_posture = strict` (Route53 interface VPCE and
+A strict cell sets `network_posture = strict` (Route53 interface VPCE and
 the self-signed Grafana ingress leaf only on that posture). Pair it with
 `network_policy_ready = true`, only after Omnistrate confirms VPC CNI
 NetworkPolicy enforcement. Without it a `strict` instance's default-deny
@@ -441,8 +441,10 @@ Ingress TLS on a strict cell needs no cell-side setup: the instance's `pavoCert`
 requests an ACM certificate the NLB presents, and ingress leaves behind the NLB
 come from `pavo-selfsigned` (the NLB does not validate them).
 
-`kubeconfig_path` is required when the EKS API has no public endpoint. See
-[Laptop access](#laptop-access-strict-cell) for Client VPN.
+`kubeconfig_path` is needed only when the caller cannot reach a private-only
+cell's API. The default derives the endpoint and uses `aws eks get-token`, which
+also works from inside the VPC or over Client VPN or peering into it; see
+[Laptop access](#laptop-access-strict-cell) and `scripts/create-cell-vpn.sh`.
 
 ## Cell self-hosting flags (`enable_eck`, `enable_observability`)
 
@@ -467,7 +469,7 @@ Each in-VPC substrate is gated by a cell flag (`enable_eck` defaults `false`, `e
 
 ## Connector access from a strict cell (`connector_assumable_role_arns`, `strict_egress_extra_destinations`, `enable_sagemaker_api_endpoint`, `snowflake_privatelink`)
 
-A strict cell has no NAT or internet gateway, and its instances' pods may reach only the VPC, same-region S3 and the cluster's own services. These four inputs let specific connectors reach the customer's own systems. All four default to off or empty, so a cell that sets none of them renders exactly as before.
+On a strict instance the egress NetworkPolicy lets pods reach only the VPC, same-region S3 and the cluster's own services (a private cell also has no NAT; see RUNBOOKS.md). These four inputs let specific connectors reach the customer's own systems. All four default to off or empty, so a cell that sets none of them renders exactly as before.
 
 | Input | What it creates (cell-scoped) | What the instance does with it |
 |---|---|---|
