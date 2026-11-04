@@ -7,8 +7,11 @@
 # that account share it, keyed per cell (see below). Run this ONCE per AWS
 # account, before the first `terraform init` for any cell in it.
 #
-# Naming convention (derived from the caller's account ID — do not hand-name):
-#   S3 bucket   = pavo-tf-state-<account-id>   (versioned, AES256, public-blocked)
+# Naming convention (derived from the caller's account ID):
+#   S3 bucket   = pavo-tf-state-<account-id>   (versioned, SSE-KMS under the cell CMK
+#                 when one is passed, else AES256; public-blocked)
+#                 Override with TF_STATE_BUCKET to keep state outside pavo-* (the
+#                 runner's s3:* grant covers pavo-*). Never rename an existing cell's.
 #   Lock table  = pavo-tf-state-locks          (DynamoDB, LockID hash key)
 #   State key   = pavo-bootstrap-aws/<cluster>/terraform.tfstate   (per cell)
 #
@@ -17,8 +20,9 @@
 # this doubles as a drift-fixer. Does NOT delete anything.
 #
 # Usage:
-#   AWS_PROFILE=<account-profile> ./scripts/create-state-backend.sh [region]
+#   AWS_PROFILE=<account-profile> ./scripts/create-state-backend.sh [region] [kms-key-arn]
 #     region defaults to us-east-1 (matches the deployment cells).
+#     kms-key-arn: the cell CMK (create-cmk.sh); state can hold sensitive values.
 #
 # After it prints the backend config, commit it as
 # cells/<cluster>/backend.s3.tfbackend and init with:
@@ -27,6 +31,7 @@
 set -euo pipefail
 
 REGION="${1:-us-east-1}"
+KMS_KEY_ARN="${2:-}"
 
 command -v aws >/dev/null 2>&1 || { echo "[FAIL] aws CLI not found" >&2; exit 1; }
 
@@ -34,7 +39,7 @@ ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)" || {
   echo "[FAIL] could not resolve AWS account — check AWS_PROFILE / credentials" >&2
   exit 1
 }
-BUCKET="pavo-tf-state-${ACCOUNT_ID}"
+BUCKET="${TF_STATE_BUCKET:-pavo-tf-state-${ACCOUNT_ID}}"
 TABLE="pavo-tf-state-locks"
 
 echo "Account : ${ACCOUNT_ID}"
@@ -68,9 +73,12 @@ fi
 # State-bucket hygiene — idempotent, re-asserted on every run.
 aws s3api put-bucket-versioning --bucket "${BUCKET}" \
   --versioning-configuration Status=Enabled
-aws s3api put-bucket-encryption --bucket "${BUCKET}" \
-  --server-side-encryption-configuration \
-  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+if [ -n "${KMS_KEY_ARN}" ]; then
+  SSE='{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms","KMSMasterKeyID":"'"${KMS_KEY_ARN}"'"},"BucketKeyEnabled":true}]}'
+else
+  SSE='{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+fi
+aws s3api put-bucket-encryption --bucket "${BUCKET}" --server-side-encryption-configuration "${SSE}"
 aws s3api put-public-access-block --bucket "${BUCKET}" \
   --public-access-block-configuration \
   BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
@@ -80,7 +88,7 @@ TLS_POLICY="$(cat <<JSON
 JSON
 )"
 aws s3api put-bucket-policy --bucket "${BUCKET}" --policy "${TLS_POLICY}"
-echo "[ok]   versioning + AES256 encryption + public-access-block + TLS-only policy enforced"
+echo "[ok]   versioning + ${KMS_KEY_ARN:+SSE-KMS }encryption + public-access-block + TLS-only policy enforced"
 
 # --- DynamoDB lock table ---------------------------------------------------
 if aws dynamodb describe-table --table-name "${TABLE}" --region "${REGION}" >/dev/null 2>&1; then
@@ -95,6 +103,10 @@ else
 fi
 
 # --- Emit the per-cell backend config -------------------------------------
+# kms_key_id is not optional with a CMK: terraform sends SSE-S3 without it and
+# the bucket default does not apply to that write.
+KMS_LINE=""
+[ -z "${KMS_KEY_ARN}" ] || KMS_LINE=$'\n'"  kms_key_id     = \"${KMS_KEY_ARN}\""
 cat <<EOF
 
 Done. Add a per-cell backend file (replace <cluster> with the EKS cluster name):
@@ -104,7 +116,7 @@ Done. Add a per-cell backend file (replace <cluster> with the EKS cluster name):
   key            = "pavo-bootstrap-aws/<cluster>/terraform.tfstate"
   region         = "${REGION}"
   dynamodb_table = "${TABLE}"
-  encrypt        = true
+  encrypt        = true${KMS_LINE}
 
 Then: terraform init -backend-config=cells/<cluster>/backend.s3.tfbackend
 EOF

@@ -7,7 +7,7 @@
 # models:
 #
 #   --mode=direct  You apply this directory as a Terraform root with credentials
-#                  already in the cell account (Pavo's own cells). Preflight can
+#                  already in the cell account. Preflight can
 #                  and does verify cluster-admin against those ambient creds.
 #
 #   --mode=child   You consume this repo as a Terraform CHILD MODULE. Your root/CI
@@ -65,13 +65,13 @@ if [ "$MODE" = "child" ]; then
 fi
 
 # =============================================================================
-# --mode=direct : Pavo direct-apply with ambient cell-account credentials
+# --mode=direct : direct apply with ambient cell-account credentials
 # =============================================================================
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 
-# helm/kubectl CLIs are used by this direct-mode preflight's cluster checks below.
-for cmd in kubectl helm; do
+# kubectl is used by this direct-mode preflight's cluster checks below.
+for cmd in kubectl; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     fail "missing required CLI: $cmd (needed for --mode=direct cluster checks)"
   fi
@@ -128,7 +128,6 @@ check_can_i create clusterroles.rbac.authorization.k8s.io
 check_can_i create clusterrolebindings.rbac.authorization.k8s.io
 check_can_i create storageclasses.storage.k8s.io
 check_can_i create namespaces
-check_can_i patch serviceaccounts --namespace kube-system
 check_can_i create ingressclasses.networking.k8s.io
 
 # --- ESO + cert-manager CRD readiness (informational) --------------------
@@ -139,9 +138,9 @@ else
 fi
 
 if kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
-  pass "clusterissuers.cert-manager.io CRD already installed (cert-manager present — bootstrap will adopt the existing ClusterIssuer via SSA)"
+  pass "clusterissuers.cert-manager.io CRD already installed (cert-manager present — bootstrap will adopt the existing ClusterIssuers via SSA)"
 else
-  warn "clusterissuers.cert-manager.io CRD missing — bootstrap's pavo_letsencrypt_prod resource will fail to apply. Install cert-manager before bootstrap, or skip that resource until cert-manager is present."
+  warn "clusterissuers.cert-manager.io CRD missing — bootstrap's ClusterIssuer resources (pavo_letsencrypt_prod, pavo_selfsigned) will fail to apply. Install cert-manager before bootstrap, or skip them until cert-manager is present."
 fi
 
 printf '\nPreflight (direct mode) passed. Safe to run: terraform init && terraform apply\n'

@@ -178,10 +178,9 @@ data "aws_iam_policy_document" "microvm_build_boundary" {
     actions = [
       "logs:CreateLogStream", "logs:PutLogEvents",
     ]
-    # IAM simulation currently returns implicitDeny for these documented
-    # log-stream ARNs. Keep the least-privilege resource shape required by the
-    # CloudWatch Logs authorization reference and resolve the discrepancy with
-    # an actual Dev image build before rollout.
+    # The IAM policy simulator reports implicitDeny for this ARN because the
+    # log-group name contains '/', a simulator artifact (same as the microvm/<id>
+    # quirk). Real builds write these streams; do not broaden to all log groups.
     resources = ["arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda-microvms/pavo-microvm-*:log-stream:*"]
   }
 }

@@ -2,7 +2,7 @@
 #
 # Purpose: prove that pavo-bootstrap-aws composes as a child module with a
 # caller-injected, ALIASED aws provider — the path our own direct-root apply and
-# awstest never exercise. Specifying a `providers` map cancels default-provider
+# a direct-root apply never exercise. Specifying a `providers` map cancels default-provider
 # inheritance, so `terraform init && terraform validate` here is the authority on
 # the COMPLETE required providers map a consumer must pass. If validate demands
 # time/random (the module uses time_sleep + random_password without provider
@@ -32,9 +32,7 @@ module "bootstrap" {
     aws = aws.cell
   }
 
-  vpc_id             = "vpc-0fixture000000000"
-  private_subnet_ids = ["subnet-0fixture00000000", "subnet-0fixture00000001", "subnet-0fixture00000002"]
-  eks_cluster_name   = "hc-fixture"
-  eks_oidc_provider  = "oidc.eks.us-east-1.amazonaws.com/id/FIXTURE0000000000000000000000000"
-  runner_role_arn    = "arn:aws:iam::123456789012:role/fixture-runner"
+  runner_role_arn            = "arn:aws:iam::123456789012:role/fixture-runner"
+  cell_kms_key_arn           = "arn:aws:kms:us-east-1:123456789012:key/example"
+  observability_grafana_host = "fixture.example.com"
 }

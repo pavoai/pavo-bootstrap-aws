@@ -4,9 +4,9 @@
 # read ConfigMaps/pods). Applied by observability.tf ONLY when
 # pavo_app_alerts_enabled = true AND sanitizer_image is a real signed digest.
 #
-# Templated: ${"$"}{sanitizer_image} MUST be a cosign-signed digest — the cell
-# ClusterImagePolicy admits only the signed ghcr.io/pavoai/pavo-alert-sanitizer
-# digest from CI (see observability/sanitizer/SIGNING.md). ${"$"}{cell_id} /
+# Templated: ${"$"}{sanitizer_image} MUST be the cosign-signed
+# ghcr.io/pavoai/pavo-alert-sanitizer digest from Pavo CI (pinned by digest;
+# verify with cosign if required). ${"$"}{cell_id} /
 # ${"$"}{aws_region} / ${"$"}{customer_name} stamp the cell identity metadata.
 apiVersion: apps/v1
 kind: Deployment

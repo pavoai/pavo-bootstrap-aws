@@ -11,6 +11,32 @@
 #
 # Templated by observability.tf: ${"$"}{vpc_cidr} (k8s API reachability, in-VPC),
 # and the two OPTIONAL alert-egress legs render only when their CIDR var is set.
+#
+# Prometheus runs with web.enable-lifecycle (the configmap-reload sidecar needs
+# /-/reload) and the remote-write receiver (OTel collector), both unauthenticated.
+# Port 9090 is reachable only from this namespace and from instance namespaces
+# (stage 2 labels them policy.sigstore.dev/include=true; its readiness Job
+# probes Prometheus from there), not from the rest of the cell.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pavo-observability-prometheus-ingress
+  namespace: pavo-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+      app.kubernetes.io/component: server
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              policy.sigstore.dev/include: "true"
+      ports:
+        - { protocol: TCP, port: 9090 }
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -37,8 +63,8 @@ spec:
     # k8s API — Grafana sidecar watches ConfigMaps; Prometheus SD lists endpoints;
     # kube-state-metrics lists every object type it exports.
     #
-    # TWO CIDRs are required, and omitting the second one broke kube-state-metrics
-    # for 25 days. In-cluster clients do NOT dial the API server's ENI. client-go
+    # TWO CIDRs are required; omitting the second one breaks kube-state-metrics
+    # silently. In-cluster clients do NOT dial the API server's ENI. client-go
     # reads KUBERNETES_SERVICE_HOST, which is the `kubernetes` Service ClusterIP
     # (10.100.0.1), and that address lives in the cluster's SERVICE CIDR, not the
     # VPC CIDR. NetworkPolicy is evaluated against that destination, so a

@@ -1,5 +1,6 @@
 # grafana/grafana values — in-VPC Grafana. Templated by observability.tf with
-# ${grafana_host} (the cell's external hostname).
+# ${grafana_host} (the cell's external hostname) and ${cluster_issuer}
+# (Let's Encrypt on standard, pavo-selfsigned on strict).
 #
 # Invariants: telemetry OFF (no phone-home); Postgres metadata backend;
 # dashboards as-code via the sidecar; single in-VPC Prometheus datasource —
@@ -69,11 +70,11 @@ datasources:
 ingress:
   enabled: true
   ingressClassName: pavo-nginx
-  # Real cert from cert-manager (same issuer the frontend uses) — without this the
-  # pavo-nginx controller serves its default self-signed cert, and the frontend's
-  # HSTS (includeSubDomains on *.pavoai.dev) makes browsers hard-block it.
+  # Same issuer the frontend uses on this posture: Let's Encrypt on standard (the
+  # frontend's HSTS hard-blocks nginx's default cert), self-signed on strict where
+  # the NLB terminates TLS with the ACM cert and never validates nginx's leaf.
   annotations:
-    cert-manager.io/cluster-issuer: pavo-letsencrypt-prod
+    cert-manager.io/cluster-issuer: ${cluster_issuer}
   hosts:
     - "grafana.${grafana_host}"
   tls:

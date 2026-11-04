@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.7"
 
   # No backend block here. Add a separate `backend.tf` file with your chosen
   # backend BEFORE running `terraform init`. See README "Configuring Terraform
@@ -62,7 +62,7 @@ data "aws_region" "current" {}
 # -----------------------------------------------------------------------------
 
 data "aws_eks_cluster" "primary" {
-  name = var.eks_cluster_name
+  name = local.eks_cluster_name
 
   lifecycle {
     # The injected AWS provider must point at the cell account. runner_role_arn is
@@ -94,7 +94,7 @@ locals {
   # Region comes from the injected provider. --role-arn is appended only for
   # cross-account runs (ambient creds in a different account than the cell).
   eks_exec_args = concat(
-    ["eks", "get-token", "--cluster-name", var.eks_cluster_name, "--region", data.aws_region.current.name, "--output", "json"],
+    ["eks", "get-token", "--cluster-name", local.eks_cluster_name, "--region", data.aws_region.current.name, "--output", "json"],
     var.k8s_get_token_role_arn != "" ? ["--role-arn", var.k8s_get_token_role_arn] : [],
   )
 
@@ -104,7 +104,7 @@ locals {
   # `aws eks get-token` authenticates against something that cannot be dialled.
   # Setting `kubeconfig_path` points every Kubernetes-facing provider at a
   # ready-made kubeconfig instead — in practice the one produced by
-  # `omnistrate-ctl deployment-cell update-kubeconfig <cell> --role cluster-admin`,
+  # `omnistrate-ctl deployment-cell update-kubeconfig <cell> --role cluster-admin` (run by Pavo),
   # which targets an Omnistrate-side proxy and uses client certificates rather than
   # an exec plugin. That proxy path is gated by the account CloudFormation
   # parameter `K8sDebugAccessEnabled`, so it is the customer's switch, not ours.

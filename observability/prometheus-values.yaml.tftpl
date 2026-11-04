@@ -4,7 +4,7 @@
 # VPC. The remote-write *receiver* (--web.enable-remote-write-receiver) is an
 # INBOUND, in-cluster path only (the OTel collector -> here), so zero-egress holds.
 # scrapeConfigs is nulled to drop ALL built-in broad discovery; we add only the
-# named jobs below (ES exporter + KSM + node-exporter + self).
+# named jobs below (ES exporter, KSM, node-exporter, cadvisor, zitadel, annotated pods, self).
 #
 # Templated by observability.tf: the Alertmanager route/receiver legs render only
 # for the legs actually configured (${"$"}{customer_leg_enabled} / ${"$"}{pavo_leg_enabled});
@@ -146,7 +146,7 @@ serverFiles:
       - job_name: kubernetes-cadvisor
         scheme: https
         # Verify the kubelet's serving cert against the cluster CA — EKS signs it
-        # and includes the node InternalIP in the SANs (confirmed on hc-fmnwao4ct),
+        # and includes the node InternalIP in the SANs (confirmed on a live cell),
         # so the bearer token is never sent to an unverified/impersonated endpoint.
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
@@ -272,13 +272,13 @@ serverFiles:
       # series don't exist and the rules stay silent. All signals are
       # in-cluster scrapes — no CloudWatch/AWS API dependency; RDS trouble
       # surfaces via the persistence_* rules below.
-      # SLO thresholds from the LLD: StartWorkflowExecution p95 < 150ms,
+      # SLO thresholds: StartWorkflowExecution p95 < 150ms,
       # schedule-to-start p95 < 150ms, shard lock latency < 1ms.
       # Shard lock is the one alert that deliberately sits above its SLO: it
       # pages at 5ms, not 1ms. A healthy cell already measures ~0.99ms p99
       # under load, so alerting at the target would flap. 5ms = contention
       # worth waking someone for; use the dashboard panel to track the SLO.
-      # Alertnames are mention-map keys in central-ci/variables.tf — rename both.
+      # Alertnames are mention-map keys in Pavo's alert routing — rename both.
       - name: temporal
         rules:
           - alert: TemporalRoleUnavailable
@@ -332,7 +332,7 @@ serverFiles:
               severity: warning
             annotations:
               summary: "Temporal shedding load (resource_exhausted) — rps/concurrency limits hit"
-          # Payload-size pair (LLD phase 9.3). increase() with no `for`: a single
+          # Payload-size pair. increase() with no `for`: a single
           # rejection must fire; rate()>0 decays before a 5m hold completes.
           - alert: TemporalPayloadSizeRejections
             expr: sum(increase(blob_size_error[5m])) > 0
@@ -359,9 +359,9 @@ serverFiles:
       # Workload health. Deliberately generic: these two rules watch every
       # Deployment and container in the scoped namespaces rather than naming
       # services, so a workload added later is covered without touching this
-      # file. They are the backstop for the failure mode that cost us most of
-      # 2026-08-28: config is wrong, the release still reports success, and the
-      # damage only becomes visible when something recreates a Pod.
+      # file. They are the backstop for the failure mode where config is wrong,
+      # the release still reports success, and the damage only becomes visible
+      # when something recreates a Pod.
       #
       # Scope is the app instance namespaces PLUS pavo-observability. The
       # observability stack was previously the one thing the monitoring did not
@@ -383,7 +383,7 @@ serverFiles:
       # they watch. They cannot detect Prometheus failing to start, and if
       # kube-state-metrics is down the series vanish and the comparison below
       # silently stops firing rather than alerting. First-convergence assertion is
-      # therefore NOT their job — that belongs to the Phase-4 readiness barrier,
+      # therefore NOT their job — that belongs to the readiness barrier,
       # which runs from outside the cell. These rules cover steady-state
       # degradation only.
       - name: workloads

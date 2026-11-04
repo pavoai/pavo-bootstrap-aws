@@ -1,0 +1,271 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyDescribeList",
+      "Effect": "Allow",
+      "Action": [
+        "rds:Describe*",
+        "rds:List*",
+        "elasticache:Describe*",
+        "elasticache:List*",
+        "elasticfilesystem:Describe*",
+        "elasticfilesystem:List*",
+        "eks:ListClusters",
+        "secretsmanager:ListSecrets",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeVpcEndpointServices",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribePrefixLists"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "S3",
+      "Effect": "Allow",
+      "Action": [
+        "s3:*"
+      ],
+      "Resource": [
+        "arn:aws:s3:::pavo-*",
+        "arn:aws:s3:::pavo-*/*"
+      ]
+    },
+    {
+      "Sid": "DenyTerraformStateBucket",
+      "Effect": "Deny",
+      "Action": [
+        "s3:*"
+      ],
+      "Resource": [
+        "arn:aws:s3:::pavo-tf-state-*",
+        "arn:aws:s3:::pavo-tf-state-*/*"
+      ]
+    },
+    {
+      "Sid": "SNS",
+      "Effect": "Allow",
+      "Action": [
+        "sns:*"
+      ],
+      "Resource": [
+        "arn:aws:sns:*:*:pavo-*"
+      ]
+    },
+    {
+      "Sid": "SQS",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:*"
+      ],
+      "Resource": [
+        "arn:aws:sqs:*:*:pavo-*"
+      ]
+    },
+    {
+      "Sid": "SESCreateIdentityWithRequestTag",
+      "Effect": "Allow",
+      "Action": [
+        "ses:CreateEmailIdentity"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/managed_by": "pavo"
+        }
+      }
+    },
+    {
+      "Sid": "SESSendFromNoreply",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "ses:FromAddress": "noreply@*"
+        }
+      }
+    },
+    {
+      "Sid": "SESMutatingTaggedPavoIdentities",
+      "Effect": "Allow",
+      "Action": [
+        "ses:DeleteEmailIdentity",
+        "ses:GetEmailIdentity",
+        "ses:ListTagsForResource",
+        "ses:PutEmailIdentityDkimSigningAttributes"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "pavo"
+        }
+      }
+    },
+    {
+      "Sid": "SESTagWithoutRewritingOwnership",
+      "Effect": "Allow",
+      "Action": [
+        "ses:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "pavo"
+        },
+        "StringEqualsIfExists": {
+          "aws:RequestTag/managed_by": "pavo"
+        }
+      }
+    },
+    {
+      "Sid": "SESUntagExceptOwnership",
+      "Effect": "Allow",
+      "Action": [
+        "ses:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "pavo"
+        },
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "managed_by"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "BedrockInvokeScopedToModels",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-6-v1",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-6-v1",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-5",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-5-5",
+        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0"
+      ]
+    },
+    {
+      "Sid": "ConnectorAssumeCustomerRoles",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "sts:ExternalId": "pavo-*"
+        }
+      }
+    },
+    {
+      "Sid": "DenyCreateRoleWithoutBoundary",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/pavo-*",
+        "arn:aws:iam::*:role/keda-*"
+      ],
+      "Condition": {
+        "Null": {
+          "iam:PermissionsBoundary": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DenyDeleteRolePermissionsBoundary",
+      "Effect": "Deny",
+      "Action": [
+        "iam:DeleteRolePermissionsBoundary"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "SSMRead",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": [
+        "arn:aws:ssm:*:*:parameter/pavo/*"
+      ]
+    },
+    {
+      "Sid": "SecretsManagerScopedRead",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:*:*:secret:rds!*"
+      ]
+    },
+    {
+      "Sid": "KMSUseOnCustomerKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey",
+        "kms:GenerateDataKeyWithoutPlaintext"
+      ],
+      "Resource": [
+        "*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "rds.*.amazonaws.com",
+            "secretsmanager.*.amazonaws.com",
+            "elasticache.*.amazonaws.com",
+            "elasticfilesystem.*.amazonaws.com",
+            "s3.*.amazonaws.com",
+            "sns.*.amazonaws.com",
+            "sqs.*.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}

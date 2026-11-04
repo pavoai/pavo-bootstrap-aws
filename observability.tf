@@ -1,10 +1,10 @@
 # =============================================================================
-# In-VPC observability stack (cell-scoped, opt-in via var.enable_observability)
+# In-VPC observability stack (cell-scoped, on by default, gated by var.enable_observability)
 # =============================================================================
 # For customers whose telemetry must not leave the VPC (grafana_mode=self_hosted).
 # Installs, into the `pavo-observability` namespace:
 #   - Postgres        (Grafana metadata backend)
-#   - Prometheus      (in-VPC TSDB; scrapes ES exporter + KSM + node-exporter;
+#   - Prometheus      (in-VPC TSDB; scrapes the named jobs in prometheus-values.yaml.tftpl;
 #                      accepts remote-write from the OTel collector)
 #   - Grafana         (in-VPC UI, internal ingress, dashboards as-code)
 #   - OTel collector  (receives app OTLP metrics -> remote-writes to Prometheus)
@@ -12,10 +12,11 @@
 # Zero telemetry egress: no metrics/logs leave the VPC, and no AWS API
 # dependencies — all metrics come from in-cluster scrapes.
 #
-# Secrets are generated with random_password (bootstrap state is customer-local,
-# so they stay in the customer's control; the break-glass Role cannot read k8s
-# Secrets). This is the customer-applied analogue of the ES fileRealm ESO
-# generators (which live in Omnistrate-managed state, hence ESO there).
+# Secrets are generated with random_password in customer-local bootstrap state.
+# The inert support Role (manifests/role.yaml) cannot read k8s Secrets; the
+# Omnistrate runner's cluster-admin access entry (main.tf) and the customer-gated
+# K8sDebugAccess path can, as can any cluster-admin. This is the customer-applied
+# analogue of the ES fileRealm ESO generators (Omnistrate-managed state, hence ESO).
 
 locals {
   obs_count = var.enable_observability ? 1 : 0
@@ -37,8 +38,8 @@ locals {
   ) : ""
 
   # Pavo alert leg (sanitizer + its route). Off unless explicitly enabled AND a
-  # real signed image digest is provided — the cell ClusterImagePolicy admits only
-  # the signed digest, so there is nothing to deploy until the signing build runs.
+  # signed image digest is provided — the image is pinned by digest, so there is
+  # nothing to deploy until the signing build runs.
   obs_sanitizer_enabled = var.enable_observability && var.pavo_app_alerts_enabled && var.sanitizer_image != ""
 
   # imagePullSecret the sanitizer pod uses to pull its private ghcr.io/pavoai
@@ -51,7 +52,7 @@ locals {
 # VPC CIDR for the (staged) egress NetworkPolicy's in-VPC k8s-API allowance.
 data "aws_vpc" "cell" {
   count = local.obs_count
-  id    = var.vpc_id
+  id    = local.vpc_id
 }
 
 # CMK-encrypted gp3 StorageClass for the observability PVCs — the customer's one
@@ -247,7 +248,7 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
         }
         container {
           name  = "postgres"
-          image = "postgres:17"
+          image = local.mirrored.postgres.pull
           port {
             name           = "postgres"
             container_port = 5432
@@ -328,7 +329,7 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
 # carries `wait_for_rollout = false`). This is deliberate and load-bearing, not a
 # way to make a flaky apply go green.
 #
-# The problem it solves: this module is applied by the CUSTOMER (Phase 3), which
+# The problem it solves: this module is applied by the CUSTOMER, which
 # on a brand-new cell happens BEFORE the cell has converged. At that moment there
 # are no schedulable worker nodes — the only nodes present carry Omnistrate's
 # `CriticalAddonsOnly=true:NoSchedule` taint. Postgres additionally needs a PVC
@@ -336,10 +337,10 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
 # So the pods legitimately cannot start yet, the default waits time out, and the
 # whole apply fails on infrastructure that is otherwise perfectly correct.
 #
-# That is exactly what happened on an early customer onboarding: the operator had to
-# apply once with enable_observability = false, wait for the cell to reach
-# RUNNING, then flip it to true and apply again. Encoding a manual two-phase
-# dance as a customer-facing instruction is the bug; these flags remove it.
+# Without these flags the operator would have to apply once with
+# enable_observability = false, wait for the cell to reach RUNNING, then flip it
+# to true and apply again. Encoding a manual two-phase dance as a customer-facing
+# instruction is the bug; these flags remove it.
 #
 # What this does NOT do:
 #   - It does not skip Helm hooks. `wait = false` only skips the post-install
@@ -352,7 +353,7 @@ resource "kubernetes_stateful_set_v1" "observability_postgres" {
 #   - It does not change `count`, so `enable_observability` still structurally
 #     decides whether these objects exist at all.
 #   - It does not mean nobody checks. It moves the readiness assertion to where
-#     it belongs: the Phase-4 convergence barrier in
+#     it belongs: the convergence barrier in
 #     terraform-omnistrate-aws/observability_readiness.tf, which runs from the
 #     Omnistrate runner once the cell is actually up. That barrier hard-fails the
 #     instance apply if Prometheus, Alertmanager, Grafana (and Postgres behind
@@ -375,10 +376,52 @@ resource "helm_release" "observability_prometheus" {
   repository = "https://prometheus-community.github.io/helm-charts"
   chart      = "prometheus"
   version    = var.observability_prometheus_chart_version
-  values = [templatefile("${path.module}/observability/prometheus-values.yaml.tftpl", {
-    customer_leg_enabled = var.customer_alert_webhook_url != ""
-    pavo_leg_enabled     = local.obs_sanitizer_enabled
-  })]
+  values = [
+    templatefile("${path.module}/observability/prometheus-values.yaml.tftpl", {
+      customer_leg_enabled = var.customer_alert_webhook_url != ""
+      pavo_leg_enabled     = local.obs_sanitizer_enabled
+    }),
+    yamlencode({
+      alertmanager = {
+        image = {
+          repository = local.mirrored.alertmanager.repository
+          tag        = local.mirrored.alertmanager.tag_at_digest
+        }
+      }
+      configmapReload = {
+        prometheus = {
+          image = {
+            repository = local.mirrored.config_reloader.repository
+            tag        = local.mirrored.config_reloader.tag
+            digest     = local.mirrored.config_reloader.digest
+          }
+        }
+      }
+      "kube-state-metrics" = {
+        image = {
+          registry   = local.mirrored.kube_state_metrics.registry
+          repository = local.mirrored.kube_state_metrics.split_repository
+          sha        = local.mirrored.kube_state_metrics.digest
+          tag        = local.mirrored.kube_state_metrics.tag
+        }
+      }
+      "prometheus-node-exporter" = {
+        image = {
+          registry   = local.mirrored.node_exporter.registry
+          repository = local.mirrored.node_exporter.split_repository
+          digest     = local.mirrored.node_exporter.digest
+          tag        = local.mirrored.node_exporter.tag
+        }
+      }
+      server = {
+        image = {
+          repository = local.mirrored.prometheus.repository
+          tag        = local.mirrored.prometheus.tag
+          digest     = local.mirrored.prometheus.digest
+        }
+      }
+    }),
+  ]
 
   depends_on = [
     kubernetes_namespace_v1.observability,
@@ -405,9 +448,28 @@ resource "helm_release" "observability_grafana" {
   repository = "https://grafana.github.io/helm-charts"
   chart      = "grafana"
   version    = var.observability_grafana_chart_version
-  values = [templatefile("${path.module}/observability/grafana-values.yaml.tftpl", {
-    grafana_host = var.observability_grafana_host
-  })]
+  values = [
+    templatefile("${path.module}/observability/grafana-values.yaml.tftpl", {
+      grafana_host   = var.observability_grafana_host
+      cluster_issuer = var.network_posture == "strict" ? "pavo-selfsigned" : "pavo-letsencrypt-prod"
+    }),
+    yamlencode({
+      image = {
+        registry   = local.mirrored.grafana.registry
+        repository = local.mirrored.grafana.split_repository
+        sha        = local.mirrored.grafana.digest_hex
+        tag        = local.mirrored.grafana.tag
+      }
+      sidecar = {
+        image = {
+          registry   = local.mirrored.grafana_sidecar.registry
+          repository = local.mirrored.grafana_sidecar.split_repository
+          sha        = local.mirrored.grafana_sidecar.digest_hex
+          tag        = local.mirrored.grafana_sidecar.tag
+        }
+      }
+    }),
+  ]
 
   depends_on = [
     kubernetes_namespace_v1.observability,
@@ -427,7 +489,16 @@ resource "helm_release" "observability_otel_collector" {
   chart             = "opentelemetry-collector"
   version           = var.observability_otel_collector_chart_version
   dependency_update = true
-  values            = [file("${path.module}/observability/otel-collector-values.yaml")]
+  values = [
+    file("${path.module}/observability/otel-collector-values.yaml"),
+    yamlencode({
+      image = {
+        repository = local.mirrored.otel_collector.repository
+        tag        = local.mirrored.otel_collector.tag
+        digest     = local.mirrored.otel_collector.digest
+      }
+    }),
+  ]
 
   depends_on = [
     kubernetes_namespace_v1.observability,
@@ -490,19 +561,19 @@ data "kubectl_file_documents" "obs_netpol" {
 
   # An empty Service CIDR would render `cidr: ` into the egress policy. That is
   # the dangerous failure here, not a loud one: it produces a policy that applies
-  # but matches nothing, which is exactly how kube-state-metrics ended up unable
-  # to reach the API for 25 days without a single alert. Fail the plan instead.
+  # but matches nothing, which leaves kube-state-metrics unable to reach the API
+  # without a single alert. Fail the plan instead.
   lifecycle {
     precondition {
       condition     = local.cell_service_cidr != ""
       error_message = <<-EOT
-        Could not determine the Service CIDR for cell ${var.eks_cluster_name}, so
+        Could not determine the Service CIDR for cell ${local.eks_cluster_name}, so
         the observability egress NetworkPolicy cannot allow in-cluster clients to
         reach the Kubernetes API at its Service ClusterIP.
 
         kubernetes_network_config returned neither service_ipv4_cidr nor
         service_ipv6_cidr for the cluster's ip_family. Check:
-          aws eks describe-cluster --name ${var.eks_cluster_name} \
+          aws eks describe-cluster --name ${local.eks_cluster_name} \
             --query 'cluster.kubernetesNetworkConfig'
       EOT
     }
@@ -540,7 +611,7 @@ data "kubectl_file_documents" "obs_sanitizer" {
   content = templatefile("${path.module}/observability/manifests/sanitizer.yaml.tftpl", {
     sanitizer_image  = var.sanitizer_image
     customer_name    = var.customer_name
-    cell_id          = var.eks_cluster_name
+    cell_id          = local.eks_cluster_name
     aws_region       = data.aws_region.current.name
     ghcr_pull_secret = local.obs_ghcr_pull_secret
   })
