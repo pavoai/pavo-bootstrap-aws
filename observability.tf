@@ -476,6 +476,9 @@ resource "helm_release" "observability_grafana" {
     kubernetes_secret_v1.grafana_admin,
     kubernetes_stateful_set_v1.observability_postgres,
     helm_release.observability_prometheus,
+    # Grafana's Ingress uses class pavo-nginx; the ALB admission webhook rejects
+    # an Ingress whose IngressClass does not exist yet.
+    kubectl_manifest.pavo_ingress_class,
   ]
 }
 

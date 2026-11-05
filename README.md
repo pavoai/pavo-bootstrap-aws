@@ -23,7 +23,7 @@ for customer consumption.
 ```hcl
 # Production deployments: pin to a tag.
 module "pavo_bootstrap" {
-  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.1"
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.2"
   # ...
 }
 
@@ -362,7 +362,7 @@ browsers already trust.
 
 ## Consuming as a child module (cross-account BYOC)
 
-Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.1`)
+Customers pin the mirror (`git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.2`)
 and consume this repo as a child module. **The AWS provider is caller-owned** — this
 module declares no `provider "aws"` block, so it inherits the provider you configure
 in your root (region, credentials, `assume_role`). Region is read back from that
@@ -375,7 +375,7 @@ implicitly, so only `aws` needs mapping):
 
 ```hcl
 module "pavo_bootstrap" {
-  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.1"
+  source = "git::https://github.com/pavoai/pavo-bootstrap-aws.git?ref=v0.7.2"
 
   providers = { aws = aws.cell }   # only if your aws provider is aliased
 
