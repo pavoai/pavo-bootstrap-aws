@@ -218,7 +218,7 @@ Run **`scripts/preflight.sh`** before `terraform init`. It **requires a mode**:
   and cannot validate your caller auth. See *Consuming as a child module* below.
 
 ```bash
-export EKS_CLUSTER_NAME=hc-<cluster>  # your cluster name
+export EKS_CLUSTER_NAME="<eks-cluster-name>"  # your cluster name
 export AWS_REGION=us-east-1           # your region
 ./scripts/preflight.sh --mode=direct
 ```
